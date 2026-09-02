@@ -1340,7 +1340,13 @@ function renderMoves(d, list) {
       ${[["all", "Todos"], ["loan", "Préstamos"], ["payment", "Abonos"]].map(([k, l]) => `<button class="chip ${f === k ? "on" : ""}" data-f="${k}">${l}</button>`).join("")}
     </div>`;
   if (!shown.length) {
-    html += `<div class="card">${emptyState("list", list.length ? "Nada con ese filtro." : isAdmin() ? "Sin movimientos todavía.<br>Registra el primer préstamo con el botón de arriba." : "Sin movimientos todavía.")}</div>`;
+    // Deuda recien creada: se invita a cargar el primer prestamo aqui mismo.
+    // El monto de la deuda no se pide nunca: sale de sumar lo que se registre.
+    const primera = !list.length && isAdmin() && d.active;
+    html += `<div class="card">${emptyState("list", list.length ? "Nada con ese filtro." : isAdmin()
+      ? "Todavía no hay nada registrado.<br>Ve cargando los préstamos que te han hecho, uno por uno: el saldo se calcula solo."
+      : "Sin movimientos todavía.")}
+      ${primera ? `<div class="pad" style="padding-top:0;"><button class="btn primary wide" id="firstLoan">${icon("up")}Registrar el primer préstamo</button></div>` : ""}</div>`;
   } else {
     let mes = null;
     html += `<div class="card">`;
@@ -1362,6 +1368,7 @@ function renderMoves(d, list) {
   $("debtTab").innerHTML = html;
   $("debtTab").querySelectorAll("[data-f]").forEach((b) => b.addEventListener("click", () => { S.moveFilter = b.dataset.f; renderMoves(d, list); }));
   $("debtTab").querySelectorAll("[data-e]").forEach((b) => b.addEventListener("click", () => entryDetail(Number(b.dataset.e))));
+  $("firstLoan")?.addEventListener("click", () => entryForm({ kind: "loan", currency: debtCurOf(d, S.debtCur) }));
 }
 
 function renderDebtCharts(d, list, cur) {
@@ -1846,9 +1853,11 @@ function debtForm(d) {
   const isNew = !d;
   openModal(`
     <h2>${isNew ? "Nueva deuda" : esc(d.name)}</h2>
-    <p class="muted" style="margin:-6px 0 14px;">${isNew ? "Una deuda es un espacio aparte: con una persona, una tarjeta o lo que sea. Después le registras préstamos y abonos." : "Los movimientos no se tocan desde aquí."}</p>
+    <p class="muted" style="margin:-6px 0 14px;">${isNew
+      ? "Aquí solo dices <b>con quién</b> es la deuda. <b>No necesitas saber el monto</b>: se va sumando solo con cada préstamo que registres dentro, y baja con cada abono."
+      : "Los préstamos y abonos se registran desde la pantalla de la deuda, no aquí."}</p>
     <form id="dForm" class="card pad">
-      <label class="field"><span>Nombre *</span><input id="dName" required maxlength="80" value="${esc(d?.name || "")}" placeholder="Hermano, Tarjeta Amex…"></label>
+      <label class="field"><span>¿Con quién es la deuda? *</span><input id="dName" required maxlength="80" value="${esc(d?.name || "")}" placeholder="Mi hermano, Tarjeta Amex…"></label>
       <div class="two">
         <label class="field"><span>Tipo</span>
           <select id="dKind">${Object.entries(KIND_META).map(([k, v]) => `<option value="${k}" ${(d?.kind || "person") === k ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
@@ -1856,7 +1865,7 @@ function debtForm(d) {
           <select id="dCur">${Object.entries(CUR).map(([k, v]) => `<option value="${k}" ${(d?.currency || "NIO") === k ? "selected" : ""}>${v.sym} ${v.label}</option>`).join("")}</select>
           <small class="hint">Cada movimiento puede ir en otra moneda; esta es la que se propone.</small></label>
       </div>
-      <label class="field"><span>A quién le debo</span><input id="dWho" maxlength="80" value="${esc(d?.counterpart || "")}" placeholder="Juan, Banco LAFISE…"></label>
+      <label class="field"><span>Nombre de la persona o banco (opcional)</span><input id="dWho" maxlength="80" value="${esc(d?.counterpart || "")}" placeholder="Juan, Banco LAFISE…"></label>
       <label class="field"><span>Interés anual (%)</span><input id="dRate" type="number" inputmode="decimal" min="0" max="200" step="0.01" value="${d?.interestRate ?? ""}" placeholder="0">
         <small class="hint">Solo para el simulador; el saldo registrado no cambia solo. Entre familia normalmente va vacío.</small></label>
       <label class="field"><span>Nota</span><textarea id="dNote" maxlength="300" placeholder="Acuerdos, fecha límite, lo que haga falta recordar">${esc(d?.note || "")}</textarea></label>
@@ -1871,10 +1880,10 @@ function debtForm(d) {
     if (!isNew) body.active = $("dActive").checked;
     try {
       const r = isNew ? await api("/api/debts", { method: "POST", body }) : await api(`/api/debts?id=${d.id}`, { method: "PUT", body });
-      closeModal(); toast(isNew ? "Deuda creada" : "Guardado");
+      closeModal(); toast(isNew ? "Deuda creada. Ahora registra los préstamos." : "Guardado");
       S.entries = null;
       await refresh();
-      if (isNew) openDebt(r.debt.id); else setView(S.view);
+      if (isNew) openDebt(r.debt.id, "moves"); else setView(S.view);
     } catch (err) { showErr("dMsg", err); }
   });
   $("dDel")?.addEventListener("click", async () => {
