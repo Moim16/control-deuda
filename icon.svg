@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#18181b"/>
+  <!-- billete -->
+  <rect x="96" y="176" width="320" height="200" rx="28" fill="#f4f4f5"/>
+  <circle cx="256" cy="276" r="52" fill="#18181b"/>
+  <!-- flecha hacia abajo: la deuda que baja -->
+  <path d="M256 236v72M226 280l30 30 30-30" fill="none" stroke="#f4f4f5" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="148" cy="228" r="14" fill="#18181b"/>
+  <circle cx="364" cy="324" r="14" fill="#18181b"/>
+</svg>

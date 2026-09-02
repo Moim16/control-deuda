@@ -1,0 +1,2281 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Deudas</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Deudas">
+<meta name="mobile-web-app-capable" content="yes">
+<script>
+// Se aplica el tema guardado ANTES de pintar, para que no se vea el destello
+// blanco al abrir la app en modo oscuro.
+(function () {
+  try {
+    var t = localStorage.getItem("dd_theme");
+    if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+    var dark = t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+    document.querySelector('meta[name="theme-color"]').content = dark ? "#0d0d0f" : "#ffffff";
+  } catch (e) {}
+})();
+</script>
+<style>
+/* ===========================================================================
+   Estilo minimalista, con tema claro y oscuro (mismas convenciones que
+   asistencia-obra): todo el color sale de tokens, sin sombras salvo en lo que
+   flota, y el COLOR con significado se reserva para dos cosas: el sentido de un
+   movimiento (prestamo sube / abono baja) y las series de los graficos.
+
+   Los colores de las series (--s1..--s6) son la paleta validada del metodo de
+   visualizacion: pasan las pruebas de daltonismo en los dos temas.
+   =========================================================================== */
+*, *::before, *::after { box-sizing:border-box; }
+
+:root {
+  --bg:#f7f7f8; --card:#fff; --soft:#fafafa;
+  --ink:#18181b; --on-ink:#fff; --muted:#71717a; --faint:#a1a1aa;
+  --line:#e8e8eb; --line-2:#d6d6db;
+  --glass:rgba(255,255,255,.86); --veil:rgba(24,24,27,.32);
+  --shadow:0 12px 32px rgba(24,24,27,.16);
+
+  --ok:#15803d;   --ok-bg:#f1faf3;   --ok-line:#9ccbaf;    /* abono */
+  --bad:#b91c1c;  --bad-bg:#fdf2f2;  --bad-line:#e6adad;   /* prestamo / error */
+  --half:#a16207; --half-bg:#fdf9ed; --half-line:#dcc588;  /* aviso */
+
+  /* series de los graficos (paleta validada, tema claro) */
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300;
+  --grid:#e8e8eb; --axis:#c9c9ce;
+
+  --r:10px; --r-sm:8px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#0d0d0f; --card:#171719; --soft:#1f1f23;
+    --ink:#f4f4f5; --on-ink:#0d0d0f; --muted:#a1a1aa; --faint:#6f6f78;
+    --line:#26262a; --line-2:#3a3a41;
+    --glass:rgba(13,13,15,.86); --veil:rgba(0,0,0,.6); --shadow:0 12px 32px rgba(0,0,0,.5);
+    --ok:#4ade80;   --ok-bg:#122318;   --ok-line:#2c5f3d;
+    --bad:#f87171;  --bad-bg:#271515;  --bad-line:#6e3434;
+    --half:#fbbf24; --half-bg:#251d0f; --half-line:#6b521c;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+    --grid:#26262a; --axis:#3a3a41;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0d0d0f; --card:#171719; --soft:#1f1f23;
+  --ink:#f4f4f5; --on-ink:#0d0d0f; --muted:#a1a1aa; --faint:#6f6f78;
+  --line:#26262a; --line-2:#3a3a41;
+  --glass:rgba(13,13,15,.86); --veil:rgba(0,0,0,.6); --shadow:0 12px 32px rgba(0,0,0,.5);
+  --ok:#4ade80;   --ok-bg:#122318;   --ok-line:#2c5f3d;
+  --bad:#f87171;  --bad-bg:#271515;  --bad-line:#6e3434;
+  --half:#fbbf24; --half-bg:#251d0f; --half-line:#6b521c;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+  --grid:#26262a; --axis:#3a3a41;
+  color-scheme:dark;
+}
+
+html, body { margin:0; padding:0; }
+body {
+  background:var(--bg); color:var(--ink);
+  font:15.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  letter-spacing:-0.004em; -webkit-font-smoothing:antialiased; -webkit-text-size-adjust:100%;
+  padding-bottom:calc(70px + env(safe-area-inset-bottom));
+  overflow-x:hidden; overscroll-behavior-y:contain;
+}
+body.no-nav { padding-bottom:0; }
+button, input, select, textarea { font:inherit; color:inherit; letter-spacing:inherit; }
+button { cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+.chip, nav.bottom button, .seg button, .tabs button { -webkit-user-select:none; user-select:none; }
+:focus-visible { outline:2px solid var(--ink); outline-offset:2px; border-radius:4px; }
+a { color:var(--ink); }
+.hidden { display:none !important; }
+.vhidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+svg.i { width:1em; height:1em; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+
+/* ------------------------------------------------------------------ layout */
+.wrap { max-width:680px; margin:0 auto; padding:0 16px; }
+header.top {
+  position:sticky; top:0; z-index:20; background:var(--glass); backdrop-filter:saturate(1.6) blur(10px);
+  border-bottom:1px solid var(--line); padding:calc(11px + env(safe-area-inset-top)) 16px 11px;
+}
+header.top .bar { max-width:680px; margin:0 auto; display:flex; align-items:center; gap:12px; }
+header.top .mark {
+  width:32px; height:32px; border-radius:9px; background:var(--ink); color:var(--on-ink);
+  display:flex; align-items:center; justify-content:center; flex:none;
+}
+header.top .mark svg { width:18px; height:18px; }
+header.top .title { flex:1; min-width:0; }
+header.top .title .lbl { display:block; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.1em; color:var(--faint); margin-bottom:1px; }
+header.top .title .val { display:block; font-weight:600; font-size:16.5px; letter-spacing:-.015em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+header.top button.ghost {
+  background:none; border:1px solid var(--line-2); color:var(--ink); border-radius:999px;
+  padding:7px 12px; font-size:13px; font-weight:600; min-width:40px; min-height:36px;
+}
+
+h2 { font-size:20px; font-weight:600; letter-spacing:-.02em; margin:22px 0 12px; }
+h3 { font-size:11px; font-weight:600; margin:22px 0 8px; color:var(--faint); text-transform:uppercase; letter-spacing:.09em; }
+.sec-head { display:flex; align-items:center; gap:10px; margin:22px 0 10px; }
+.sec-head h2, .sec-head h3 { margin:0; flex:1; }
+
+/* ------------------------------------------------------------- componentes */
+.card { background:var(--card); border:1px solid var(--line); border-radius:var(--r); overflow:hidden; }
+.pad { padding:16px; }
+.row { display:flex; align-items:center; gap:10px; }
+.grow { flex:1; min-width:0; }
+.muted { color:var(--muted); font-size:13px; }
+.ellip { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.num { font-variant-numeric:tabular-nums; }
+
+.btn {
+  border:1px solid var(--line-2); background:var(--card); border-radius:var(--r-sm);
+  padding:11px 15px; font-weight:500; font-size:15px; min-height:46px;
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  transition:background .12s, border-color .12s, opacity .12s;
+}
+.btn svg { width:16px; height:16px; }
+.btn:hover { background:var(--soft); }
+.btn.primary { background:var(--ink); border-color:var(--ink); color:var(--on-ink); font-weight:600; }
+.btn.primary:hover { opacity:.88; background:var(--ink); }
+.btn.wide { width:100%; }
+.btn.sm { padding:7px 12px; min-height:38px; font-size:13.5px; }
+.btn.sm svg { width:14px; height:14px; }
+.btn.danger { color:var(--bad); border-color:var(--bad-line); }
+.btn.danger:hover { background:var(--bad-bg); }
+.btn.solid-danger { background:var(--bad); border-color:var(--bad); color:#fff; font-weight:600; }
+.btn.good { color:var(--ok); border-color:var(--ok-line); }
+.btn.good:hover { background:var(--ok-bg); }
+.btn[disabled] { opacity:.45; pointer-events:none; }
+.link { background:none; border:0; padding:0; font:inherit; color:var(--ink); font-weight:600; text-decoration:underline; cursor:pointer; }
+
+.field { display:block; margin:0 0 14px; }
+.field > span { display:block; font-size:12px; font-weight:600; color:var(--muted); margin-bottom:6px; }
+.field input, .field select, .field textarea {
+  width:100%; padding:11px 13px; border:1px solid var(--line-2); border-radius:var(--r-sm);
+  background:var(--card); min-height:46px; font-size:15.5px;
+}
+.field textarea { min-height:78px; resize:vertical; line-height:1.4; }
+.field input:focus, .field select:focus, .field textarea:focus { outline:none; border-color:var(--ink); box-shadow:0 0 0 3px var(--line); }
+.field input::placeholder, .field textarea::placeholder { color:var(--faint); }
+.field .hint { display:block; font-size:12px; color:var(--faint); margin-top:5px; font-weight:400; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+
+.msg { border-radius:var(--r-sm); padding:10px 13px; font-size:13.5px; margin:12px 0; }
+.msg.err { background:var(--bad-bg); color:var(--bad); }
+.msg.ok  { background:var(--ok-bg); color:var(--ok); }
+.msg.warn { background:var(--half-bg); color:var(--half); }
+
+.empty { text-align:center; color:var(--faint); padding:38px 18px; font-size:13.5px; line-height:1.6; }
+.empty svg { width:26px; height:26px; margin-bottom:10px; opacity:.55; }
+
+.chips { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.chip {
+  border-radius:999px; padding:5px 11px; font-size:12.5px; font-weight:500;
+  background:var(--card); border:1px solid var(--line); color:var(--muted);
+  display:inline-flex; align-items:center; gap:6px; min-height:32px;
+}
+.chip:hover { border-color:var(--line-2); }
+.chip.on { background:var(--ink); border-color:var(--ink); color:var(--on-ink); }
+.badge {
+  font-size:10.5px; font-weight:600; padding:2px 8px; border-radius:999px;
+  background:var(--soft); border:1px solid var(--line); color:var(--muted);
+  text-transform:uppercase; letter-spacing:.05em; white-space:nowrap;
+}
+.badge.admin { background:var(--ink); border-color:var(--ink); color:var(--on-ink); }
+.badge.off { background:var(--bad-bg); border-color:var(--bad-line); color:var(--bad); }
+.badge.good { background:var(--ok-bg); border-color:var(--ok-line); color:var(--ok); }
+.badge.warn { background:var(--half-bg); border-color:var(--half-line); color:var(--half); }
+
+.list-item {
+  display:flex; align-items:center; gap:12px; padding:14px 16px;
+  border-bottom:1px solid var(--line); background:var(--card); width:100%; border-left:0; border-right:0; border-top:0;
+  text-align:left; font-size:15px; color:var(--ink);
+}
+.list-item:hover { background:var(--soft); }
+.list-item:last-child { border-bottom:0; }
+.list-item > svg:first-child { width:18px; height:18px; color:var(--muted); }
+.list-item .chev { width:15px; height:15px; color:var(--faint); }
+
+/* Selector segmentado y pestañas. */
+.seg { display:flex; gap:4px; padding:4px; background:var(--soft); border-radius:var(--r); }
+.seg button {
+  flex:1; border:0; background:none; border-radius:var(--r-sm); padding:9px 4px; min-height:44px;
+  font-size:12.5px; font-weight:500; color:var(--muted);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+}
+.seg button svg { width:17px; height:17px; }
+.seg button.on { background:var(--card); color:var(--ink); font-weight:600; border:1px solid var(--line); }
+.tabs { display:flex; gap:2px; border-bottom:1px solid var(--line); margin:0 0 14px; }
+.tabs button {
+  border:0; background:none; padding:10px 12px; font-size:14px; font-weight:500; color:var(--muted);
+  position:relative; min-height:44px; display:inline-flex; align-items:center; gap:6px;
+}
+.tabs button.on { color:var(--ink); font-weight:600; }
+.tabs button.on::after { content:""; position:absolute; left:8px; right:8px; bottom:-1px; height:2px; background:var(--ink); border-radius:2px 2px 0 0; }
+.tabs .cnt { font-size:11px; background:var(--soft); border:1px solid var(--line); border-radius:999px; padding:0 6px; color:var(--muted); }
+
+/* -------------------------------------------------------------- resumen --
+   El numero grande manda: la deuda total, con las cifras proporcionales del
+   sistema (nada de tabular-nums en un numero suelto). */
+.hero { padding:18px 16px 16px; }
+.hero .lbl { font-size:12px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+.hero .val { font-size:40px; font-weight:600; letter-spacing:-.03em; line-height:1.1; margin:4px 0 2px; }
+.hero .val small { font-size:18px; font-weight:500; color:var(--muted); letter-spacing:0; margin-right:4px; }
+.hero .sub { font-size:13px; color:var(--muted); }
+.tiles { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+.tile { background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:12px 13px; min-width:0; }
+.tile .lbl { font-size:11px; font-weight:600; color:var(--faint); text-transform:uppercase; letter-spacing:.07em; }
+.tile .val { font-size:17px; font-weight:600; letter-spacing:-.02em; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tile .val.good { color:var(--ok); }
+.tile .val.bad { color:var(--bad); }
+
+/* Tarjeta de deuda en el resumen. */
+.debt-card { display:block; width:100%; text-align:left; background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:14px 16px; color:var(--ink); margin-bottom:10px; }
+.debt-card:hover { border-color:var(--line-2); background:var(--soft); }
+.debt-card .top { display:flex; align-items:center; gap:10px; }
+.debt-card .kind { width:36px; height:36px; border-radius:10px; background:var(--soft); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; color:var(--muted); flex:none; }
+.debt-card .kind svg { width:18px; height:18px; }
+.debt-card .name { font-weight:600; font-size:15.5px; }
+.debt-card .who { font-size:12.5px; color:var(--faint); }
+.debt-card .bal { text-align:right; }
+.debt-card .bal b { display:block; font-size:17px; font-weight:600; letter-spacing:-.02em; }
+.debt-card .bal small { font-size:11.5px; color:var(--faint); }
+.debt-card .meter { margin-top:12px; height:6px; border-radius:3px; background:var(--soft); border:1px solid var(--line); overflow:hidden; }
+.debt-card .meter i { display:block; height:100%; background:var(--s3); border-radius:3px; }
+.debt-card .foot { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:6px; }
+
+/* ----------------------------------------------------------- movimientos */
+.entry { display:flex; align-items:center; gap:12px; padding:13px 16px; border-bottom:1px solid var(--line); width:100%; background:var(--card); border-left:0; border-right:0; border-top:0; text-align:left; color:var(--ink); }
+.entry:last-child { border-bottom:0; }
+.entry:hover { background:var(--soft); }
+.entry .dir { width:34px; height:34px; border-radius:999px; display:flex; align-items:center; justify-content:center; flex:none; border:1px solid var(--line); }
+.entry .dir svg { width:16px; height:16px; }
+.entry .dir.loan { background:var(--bad-bg); border-color:var(--bad-line); color:var(--bad); }
+.entry .dir.payment { background:var(--ok-bg); border-color:var(--ok-line); color:var(--ok); }
+.entry .what { font-weight:500; font-size:15px; }
+.entry .when { font-size:12.5px; color:var(--faint); display:flex; gap:8px; align-items:center; }
+.entry .when svg { width:13px; height:13px; }
+.entry .amt { text-align:right; font-weight:600; font-size:15.5px; letter-spacing:-.01em; white-space:nowrap; }
+.entry .amt.loan { color:var(--bad); }
+.entry .amt.payment { color:var(--ok); }
+.entry .amt small { display:block; font-weight:400; font-size:11.5px; color:var(--faint); letter-spacing:0; }
+.month-head { font-size:11px; font-weight:600; color:var(--faint); text-transform:uppercase; letter-spacing:.09em; padding:14px 16px 6px; background:var(--card); border-bottom:1px solid var(--line); }
+
+.receipt-view { width:100%; border:1px solid var(--line); border-radius:var(--r); background:#fff; display:block; }
+.receipt-drop { border:1px dashed var(--line-2); border-radius:var(--r); padding:18px; text-align:center; color:var(--muted); font-size:13.5px; cursor:pointer; background:var(--soft); }
+.receipt-drop:hover { border-color:var(--ink); color:var(--ink); }
+.receipt-drop svg { width:22px; height:22px; margin-bottom:6px; }
+.receipt-thumb { position:relative; }
+.receipt-thumb img { width:100%; max-height:240px; object-fit:contain; border:1px solid var(--line); border-radius:var(--r); background:#fff; display:block; }
+.receipt-thumb .btn { position:absolute; right:8px; top:8px; }
+
+/* Botones de accion de la deuda (prestamo / abono). */
+.actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0; }
+
+/* ------------------------------------------------------------ comentarios */
+.cmt { padding:12px 16px; border-bottom:1px solid var(--line); background:var(--card); }
+.cmt:last-child { border-bottom:0; }
+.cmt .head { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--faint); margin-bottom:3px; }
+.cmt .head b { color:var(--ink); font-weight:600; }
+.cmt .head .del { margin-left:auto; background:none; border:0; color:var(--faint); padding:4px; display:flex; }
+.cmt .head .del svg { width:14px; height:14px; }
+.cmt .head .del:hover { color:var(--bad); }
+.cmt .text { white-space:pre-wrap; word-break:break-word; font-size:14.5px; }
+.cmt .ctx { font-size:12px; color:var(--muted); margin-top:4px; display:flex; gap:5px; align-items:center; }
+.cmt .ctx svg { width:12px; height:12px; }
+.compose { display:flex; gap:8px; align-items:flex-end; padding:12px 16px; background:var(--card); border-top:1px solid var(--line); }
+.compose textarea { flex:1; min-height:44px; max-height:120px; padding:10px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); background:var(--card); resize:none; line-height:1.4; font-size:14.5px; }
+.compose textarea:focus { outline:none; border-color:var(--ink); box-shadow:0 0 0 3px var(--line); }
+.compose .btn { min-height:44px; padding:0 14px; }
+
+/* ---------------------------------------------------------------- graficos --
+   Lineas de 2px, rejilla hairline solida y marcadores con anillo del color de
+   la superficie. El tooltip lo pone la app, el SVG solo sabe de posiciones. */
+.chart-box { position:relative; }
+.chart-box svg { width:100%; height:auto; display:block; overflow:visible; }
+.chart-box .grid line { stroke:var(--grid); stroke-width:1; }
+.chart-box .axis line { stroke:var(--axis); stroke-width:1; }
+.chart-box text { fill:var(--muted); font-size:11px; font-family:inherit; font-variant-numeric:tabular-nums; }
+.chart-box text.lbl { fill:var(--ink); font-weight:600; font-size:11.5px; }
+.chart-box .ln { fill:none; stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
+.chart-box .dot { stroke:var(--card); stroke-width:2; }
+.chart-box .bar { rx:0; }
+.chart-box .hit { fill:transparent; }
+.chart-box .cross { stroke:var(--axis); stroke-width:1; pointer-events:none; }
+.chart-box .hover-dot { stroke:var(--card); stroke-width:2; pointer-events:none; }
+.legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); margin:4px 0 10px; }
+.legend span { display:inline-flex; align-items:center; gap:6px; }
+.legend i { width:14px; height:3px; border-radius:2px; display:inline-block; }
+.legend i.sq { width:10px; height:10px; border-radius:2px; }
+.tip {
+  position:absolute; z-index:5; pointer-events:none; background:var(--card); border:1px solid var(--line-2);
+  border-radius:var(--r-sm); padding:8px 10px; font-size:12.5px; box-shadow:var(--shadow); min-width:120px;
+  transform:translate(-50%, 0); white-space:nowrap;
+}
+.tip .t { color:var(--faint); font-size:11.5px; margin-bottom:3px; }
+.tip .r { display:flex; align-items:center; gap:7px; justify-content:space-between; }
+.tip .r i { width:10px; height:3px; border-radius:2px; display:inline-block; }
+.tip .r b { font-variant-numeric:tabular-nums; }
+.tip .r span { color:var(--muted); display:inline-flex; align-items:center; gap:6px; }
+.chart-title { font-size:13.5px; font-weight:600; margin:0 0 2px; }
+.chart-sub { font-size:12px; color:var(--faint); margin:0 0 10px; }
+.tbl { width:100%; border-collapse:collapse; font-size:13.5px; }
+.tbl th, .tbl td { padding:9px 8px; border-bottom:1px solid var(--line); text-align:right; }
+.tbl th:first-child, .tbl td:first-child { text-align:left; }
+.tbl th { font-size:10.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--faint); font-weight:600; }
+.tbl td { color:var(--muted); font-variant-numeric:tabular-nums; }
+.tbl td:first-child { color:var(--ink); font-weight:500; }
+.tbl tbody tr:last-child td { border-bottom:0; }
+.tbl tfoot td { font-weight:600; color:var(--ink); border-top:1px solid var(--line-2); border-bottom:0; }
+.scroll-x { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+details.plain summary { cursor:pointer; padding:12px 16px; font-weight:500; list-style:none; display:flex; align-items:center; gap:8px; }
+details.plain summary::-webkit-details-marker { display:none; }
+details.plain summary svg { width:15px; height:15px; color:var(--faint); transition:transform .15s; }
+details.plain[open] summary svg { transform:rotate(90deg); }
+
+/* -------------------------------------------------------------- simulador */
+.sim-result { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0; }
+.sim-result .tile .val { font-size:16px; }
+.scen { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.scen i { width:12px; height:12px; border-radius:3px; display:inline-block; flex:none; }
+.scen input { flex:1; }
+.scen .x { background:none; border:0; color:var(--faint); padding:6px; display:flex; }
+.scen .x svg { width:15px; height:15px; }
+
+/* --------------------------------------------------------- ficha de usuario */
+.me-row { display:flex; align-items:center; gap:13px; padding:16px; background:var(--card); }
+.avatar { width:44px; height:44px; border-radius:999px; background:var(--ink); color:var(--on-ink); display:flex; align-items:center; justify-content:center; font-weight:600; font-size:16px; flex:none; }
+.code-box {
+  font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:21px; font-weight:600;
+  letter-spacing:.1em; text-align:center; padding:18px 10px; border:1px dashed var(--line); border-radius:var(--r);
+  background:var(--soft); word-break:break-all; user-select:all;
+}
+
+/* -------------------------------------------------------------- bottom nav */
+nav.bottom {
+  position:fixed; left:0; right:0; bottom:0; z-index:20; background:var(--glass); backdrop-filter:saturate(1.6) blur(10px);
+  border-top:1px solid var(--line); display:flex; padding-bottom:env(safe-area-inset-bottom);
+}
+nav.bottom button {
+  flex:1; border:0; background:none; padding:9px 2px; color:var(--faint); font-size:10.5px; font-weight:500;
+  display:flex; flex-direction:column; align-items:center; gap:4px; position:relative; letter-spacing:0;
+}
+nav.bottom button.on { color:var(--ink); font-weight:600; }
+nav.bottom button.on::before { content:""; position:absolute; top:0; left:50%; transform:translateX(-50%); width:26px; height:2px; background:var(--ink); border-radius:0 0 2px 2px; }
+nav.bottom svg { width:21px; height:21px; }
+
+/* -------------------------------------------------------------------- modal */
+.modal { position:fixed; inset:0; z-index:40; background:var(--veil); display:flex; align-items:flex-end; }
+.modal .sheet { background:var(--bg); width:100%; max-height:90vh; overflow-y:auto; border-radius:16px 16px 0 0; padding:18px 16px calc(24px + env(safe-area-inset-bottom)); }
+@media (min-width:640px) {
+  .modal { align-items:center; justify-content:center; padding:20px; }
+  .modal .sheet { max-width:520px; border-radius:14px; max-height:88vh; }
+}
+.sheet h2 { margin-top:4px; }
+.dlg { z-index:60; align-items:center; justify-content:center; padding:22px; }
+.dlg-box { background:var(--card); width:100%; max-width:360px; border-radius:14px; padding:22px 20px 18px; border:1px solid var(--line); box-shadow:var(--shadow); animation:pop .13s ease-out; }
+@keyframes pop { from { transform:scale(.96); opacity:0; } to { transform:scale(1); opacity:1; } }
+.dlg-box h3 { margin:0 0 7px; font-size:16.5px; font-weight:600; color:var(--ink); text-transform:none; letter-spacing:-.015em; }
+.dlg-box p { margin:0 0 18px; font-size:14px; line-height:1.55; color:var(--muted); }
+.dlg-actions { display:flex; gap:8px; }
+.dlg-actions .btn { flex:1; }
+.toast {
+  position:fixed; left:50%; transform:translateX(-50%); bottom:calc(76px + env(safe-area-inset-bottom)); z-index:70;
+  max-width:calc(100% - 32px); padding:11px 17px; border-radius:999px; font-size:14px; font-weight:500;
+  color:var(--on-ink); background:var(--ink); box-shadow:var(--shadow); animation:pop .13s ease-out; display:flex; align-items:center; gap:8px;
+}
+.toast svg { width:16px; height:16px; }
+.toast.err { background:var(--bad); color:#fff; }
+
+@media (max-width:400px) {
+  .wrap { padding:0 12px; }
+  header.top { padding-left:12px; padding-right:12px; }
+  .hero .val { font-size:34px; }
+  .tiles { gap:6px; }
+  .tile { padding:10px 11px; }
+  .tile .val { font-size:15px; }
+  h2 { font-size:19px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; }
+}
+</style>
+</head>
+<body class="no-nav">
+
+<!-- ===================== LOGIN ===================== -->
+<section id="login" class="wrap" style="max-width:400px; padding-top:52px;">
+  <div style="text-align:center; margin-bottom:26px;">
+    <div id="loginMark" style="display:inline-flex; width:52px; height:52px; align-items:center; justify-content:center; border-radius:15px; background:var(--ink); color:var(--on-ink); font-size:27px;"></div>
+    <h1 style="font-size:23px; font-weight:600; letter-spacing:-.025em; margin:14px 0 4px;">Deudas</h1>
+    <p class="muted" style="margin:0;">Lo que debo, a quién y cómo va bajando</p>
+  </div>
+  <form id="loginForm" class="card pad">
+    <label class="field"><span>Usuario</span>
+      <input id="loginName" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="20">
+    </label>
+    <label class="field"><span>Contraseña</span>
+      <input id="loginPw" type="password" autocomplete="current-password" required>
+    </label>
+    <label class="field hidden" id="fullField"><span>Tu nombre (opcional)</span>
+      <input id="loginFull" autocomplete="name" placeholder="Moisés" maxlength="80">
+    </label>
+    <button class="btn primary wide" type="submit" id="loginSubmit">Entrar</button>
+    <div id="loginMsg"></div>
+  </form>
+  <p class="muted" style="margin:14px 0 0; text-align:center;" id="forgotRow">
+    <button id="forgotBtn" class="link" style="font-weight:400; color:inherit;">¿Olvidaste tu contraseña?</button>
+  </p>
+  <p class="muted" style="margin:16px 0 0; text-align:center;">
+    <span id="switchText">¿Primera vez?</span>
+    <button id="switchMode" class="link">Crear mi cuenta</button>
+  </p>
+</section>
+
+<!-- ===================== APP ===================== -->
+<div id="app" class="hidden">
+  <header class="top">
+    <div class="bar">
+      <div class="mark" id="brandMark"></div>
+      <div class="title">
+        <span class="lbl" id="headLbl">Deudas</span>
+        <span class="val" id="headVal">—</span>
+      </div>
+      <button class="ghost" id="meBtn" aria-label="Cuenta y ajustes"></button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- ---------------- RESUMEN ---------------- -->
+    <section id="viewHome">
+      <div id="homeBody"><div class="empty">Cargando…</div></div>
+      <div style="height:20px;"></div>
+    </section>
+
+    <!-- ---------------- DEUDA ---------------- -->
+    <section id="viewDebt" class="hidden">
+      <div id="debtBody"><div class="empty">Cargando…</div></div>
+      <div style="height:20px;"></div>
+    </section>
+
+    <!-- ---------------- SIMULAR ---------------- -->
+    <section id="viewSim" class="hidden">
+      <h2>Simular pagos</h2>
+      <div id="simBody"></div>
+      <div style="height:20px;"></div>
+    </section>
+
+    <!-- ---------------- AJUSTES ---------------- -->
+    <section id="viewSettings" class="hidden">
+      <h2>Ajustes</h2>
+      <div id="settingsBody"></div>
+      <p class="muted" style="text-align:center; margin:26px 0 10px; font-size:12px;">Deudas · v1</p>
+    </section>
+  </main>
+
+  <nav class="bottom">
+    <button data-view="home" data-icon="home" class="on">Resumen</button>
+    <button data-view="debt" data-icon="wallet">Deuda</button>
+    <button data-view="sim" data-icon="calc">Simular</button>
+    <button data-view="settings" data-icon="settings">Ajustes</button>
+  </nav>
+</div>
+
+<div id="modalRoot"></div>
+<div id="dialogRoot"></div>
+
+<script>
+/* ===========================================================================
+   Estado y utilidades
+   =========================================================================== */
+/* --------------------------------- fechas --------------------------------
+   Todo usa la hora de NICARAGUA (America/Managua, UTC-6 todo el año), igual
+   que el servidor: "hoy" significa lo mismo para quien presta y quien debe.
+-------------------------------------------------------------------------- */
+const TZ_APP = "America/Managua";
+const dayFmt = new Intl.DateTimeFormat("en-CA", { timeZone: TZ_APP, year: "numeric", month: "2-digit", day: "2-digit" });
+const todayApp = () => dayFmt.format(new Date());
+const ymd = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+const toDate = (day) => { const [y, m, d] = day.split("-").map(Number); return new Date(y, m - 1, d); };
+const shiftDays = (day, n) => { const d = toDate(day); d.setDate(d.getDate() + n); return ymd(d); };
+const shiftMonths = (day, n) => {
+  const d = toDate(day); const dia = d.getDate();
+  d.setDate(1); d.setMonth(d.getMonth() + n);
+  // Si el mes destino es mas corto (31 -> feb), se queda en el ultimo dia.
+  const ult = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(dia, ult));
+  return ymd(d);
+};
+const MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const MESES_L = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const monthKey = (day) => day.slice(0, 7);
+const monthLabel = (k) => { const [y, m] = k.split("-").map(Number); return `${MESES[m - 1]} ${String(y).slice(2)}`; };
+const monthLong = (k) => { const [y, m] = k.split("-").map(Number); return `${MESES_L[m - 1]} ${y}`; };
+// Los ultimos n meses (YYYY-MM), terminando en el actual.
+function lastMonths(n) {
+  const [y, m] = todayApp().split("-").map(Number);
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(y, m - 1 - i, 1);
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  }
+  return out;
+}
+function prettyDay(day, { year = false } = {}) {
+  if (!day) return "—";
+  const d = toDate(day);
+  return d.toLocaleDateString("es", { day: "numeric", month: "short", ...(year ? { year: "numeric" } : {}) }).replace(".", "");
+}
+const prettyDayLong = (day) => toDate(day).toLocaleDateString("es", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+function fechaHora(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("es-NI", { timeZone: TZ_APP, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).replace(".", "");
+}
+// Diferencia en dias entre dos YYYY-MM-DD.
+const daysBetween = (a, b) => Math.round((toDate(b) - toDate(a)) / 86400000);
+
+/* --------------------------------- dinero -------------------------------- */
+const CUR = {
+  NIO: { sym: "C$", label: "córdobas", short: "C$" },
+  USD: { sym: "US$", label: "dólares", short: "US$" },
+};
+const nfMoney = new Intl.NumberFormat("es-NI", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const nf2 = new Intl.NumberFormat("es-NI", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = (n, cur = "NIO") => {
+  const v = Number(n) || 0;
+  return (v < 0 ? "-" : "") + (CUR[cur]?.sym || "") + nfMoney.format(Math.abs(v) < 0.005 ? 0 : Math.abs(v));
+};
+const money2 = (n, cur = "NIO") => (CUR[cur]?.sym || "") + nf2.format(Number(n) || 0);
+// Para los ejes: 12.5k, 1.2M.
+function fmtCompact(n) {
+  const v = Number(n) || 0, a = Math.abs(v);
+  if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace(".0", "") + "M";
+  if (a >= 1e3) return (v / 1e3).toFixed(a >= 1e4 ? 0 : 1).replace(".0", "") + "k";
+  return nfMoney.format(v);
+}
+const pct = (part, total) => (total > 0 ? Math.min(100, Math.round((part / total) * 100)) : 0);
+
+const S = {
+  token: localStorage.getItem("dd_token") || "",
+  me: JSON.parse(localStorage.getItem("dd_me") || "null"),
+  account: JSON.parse(localStorage.getItem("dd_account") || "null"),
+  debtId: Number(localStorage.getItem("dd_debt")) || null,
+  view: "home",
+  sum: null,            // /api/summary: deudas con totales, movimientos, comentarios
+  entries: null,        // movimientos de la deuda abierta (detallados)
+  debtTab: "moves",     // moves | chart | comments
+  moveFilter: "all",    // all | loan | payment
+  homeCur: null,        // moneda que se muestra en el resumen
+  debtCur: null,        // moneda que se muestra en la deuda abierta (si tiene varias)
+  recovery: null,
+  simScen: null,        // escenarios del simulador (persisten al cambiar de vista)
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
+const initials = (name) => (name || "?").trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join("").toUpperCase();
+const emptyState = (ic, html) => `<div class="empty">${icon(ic)}<div>${html}</div></div>`;
+const isAdmin = () => S.me?.role === "admin";
+const debtById = (id) => (S.sum?.debts || []).find((d) => d.id === id) || null;
+const currentDebt = () => debtById(S.debtId);
+// Una deuda puede tener una parte en cordobas y otra en dolares: los saldos van
+// por moneda y NUNCA se suman entre si. "C$3,500 + US$250".
+const balances = (d, sep = " + ") => d.currencies.map((c) => money(d.totals[c].balance, c)).join(sep);
+// Moneda a mostrar de una deuda: la elegida si la tiene, si no la por defecto, si no la primera.
+const debtCurOf = (d, pref) => (d.currencies.includes(pref) ? pref : d.currencies.includes(d.currency) ? d.currency : d.currencies[0]);
+
+const KIND_META = {
+  person: { label: "Persona", icon: "user" },
+  card:   { label: "Tarjeta", icon: "card" },
+  other:  { label: "Otra",    icon: "wallet" },
+};
+
+/* ===========================================================================
+   Iconos y tema
+   =========================================================================== */
+const ICONS = {
+  home:      '<path d="M3.5 11.5L12 4l8.5 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5.5h4V20"/>',
+  wallet:    '<path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h12A2.5 2.5 0 0 1 20 7.5V9"/><rect x="3" y="9" width="18" height="10.5" rx="2.5"/><path d="M15.5 14.2h.01"/>',
+  calc:      '<rect x="5" y="2.5" width="14" height="19" rx="2.5"/><path d="M8.5 6.5h7M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5h.01M8.5 18h.01M12 18h.01M15.5 18h.01"/>',
+  settings:  '<circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1v.2a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-2.8-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3.5 14h-.2a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3.5v-.2a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.8 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.2 1.8"/>',
+  user:      '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+  people:    '<circle cx="9" cy="7.5" r="3.3"/><path d="M2.8 20a6.2 6.2 0 0 1 12.4 0M16.5 10.7A3 3 0 0 0 16 4.9M21.2 20a5 5 0 0 0-3.1-4.6"/>',
+  card:      '<rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19M6.5 14h4M14.5 14h3"/>',
+  up:        '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
+  down:      '<path d="M12 5v14M5.5 12.5L12 19l6.5-6.5"/>',
+  plus:      '<path d="M12 5v14M5 12h14"/>',
+  minus:     '<path d="M5 12h14"/>',
+  check:     '<path d="M4.5 12.5l5 5 10-11"/>',
+  cross:     '<path d="M6 6l12 12M18 6L6 18"/>',
+  left:      '<path d="M15 5l-7 7 7 7"/>',
+  chevron:   '<path d="M9 5l7 7-7 7"/>',
+  chevdown:  '<path d="M5 9l7 7 7-7"/>',
+  image:     '<rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.5" cy="10" r="1.8"/><path d="M3.5 17l4.5-4.5 3.5 3.5 3-3 6 6"/>',
+  camera:    '<path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.3l1.4-2.2h5.6L16.2 7h2.3A1.5 1.5 0 0 1 20 8.5V18a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18z"/><circle cx="12" cy="13" r="3.3"/>',
+  chat:      '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H9l-4.5 3.8V16H5.5A1.5 1.5 0 0 1 4 14.5z"/>',
+  sun:       '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>',
+  moon:      '<path d="M20.5 14.3A8.5 8.5 0 0 1 9.7 3.5a8.5 8.5 0 1 0 10.8 10.8z"/>',
+  auto:      '<rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  key:       '<circle cx="8" cy="14" r="4.2"/><path d="M11 11.5L20 2.5M17 5.5l2.5 2.5M14.5 8l2 2"/>',
+  logout:    '<path d="M9.5 21H5.5A1.5 1.5 0 0 1 4 19.5v-15A1.5 1.5 0 0 1 5.5 3h4M16 16.5l4.5-4.5L16 7.5M20 12H9.5"/>',
+  userPlus:  '<circle cx="9.5" cy="7.5" r="3.6"/><path d="M3 20a6.5 6.5 0 0 1 13 0M18.5 8v6M21.5 11h-6"/>',
+  trash:     '<path d="M4 6.5h16M9.5 6.5V4.2A1.2 1.2 0 0 1 10.7 3h2.6a1.2 1.2 0 0 1 1.2 1.2v2.3M6.5 6.5l.9 13a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4l.9-13"/>',
+  edit:      '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z"/>',
+  info:      '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.1"/>',
+  calendar:  '<rect x="3" y="4.5" width="18" height="16.5" rx="2.5"/><path d="M8 2.5v4M16 2.5v4M3 9.5h18"/>',
+  install:   '<path d="M12 3v11M8 10.5l4 4 4-4"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0-2-2v-3"/>',
+  download:  '<path d="M12 3v12M7.5 10.5L12 15l4.5-4.5M4 20h16"/>',
+  whatsapp:  '<path d="M3.5 20.5l1.3-4.6a8.2 8.2 0 1 1 3.1 3l-4.4 1.6z"/><path d="M9 9.2c.2 1 .7 2 1.5 2.8s1.8 1.3 2.8 1.5l.9-1.2 1.9.8c-.2 1-1.1 1.6-2.1 1.5a7.4 7.4 0 0 1-6.1-6.1c-.1-1 .5-1.9 1.5-2.1l.8 1.9-1.2.9z"/>',
+  shield:    '<path d="M12 2.8l7.5 2.9v5.5c0 4.4-3.1 8.4-7.5 9.5-4.4-1.1-7.5-5.1-7.5-9.5V5.7z"/><path d="M9 11.9l2.2 2.2 4.3-4.3"/>',
+  chart:     '<path d="M4 20V10.5M10 20V4M16 20v-6.5M22 20H2"/>',
+  list:      '<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
+  percent:   '<path d="M19 5L5 19"/><circle cx="7" cy="7" r="2.3"/><circle cx="17" cy="17" r="2.3"/>',
+  eye:       '<path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  flag:      '<path d="M5 21V4.5M5 4.5h12.5l-2 4 2 4H5"/>',
+  archive:   '<rect x="3" y="4" width="18" height="4.5" rx="1.2"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5M10 13h4"/>',
+  send:      '<path d="M21 3L10.5 13.5M21 3l-7 18-3.5-7.5L3 10z"/>',
+  coins:     '<ellipse cx="9" cy="7" rx="6" ry="2.6"/><path d="M3 7v4c0 1.4 2.7 2.6 6 2.6s6-1.2 6-2.6V7"/><path d="M3 11v4c0 1.4 2.7 2.6 6 2.6 1 0 2-.1 2.9-.3"/><path d="M13 13.5c.9 1.2 3.2 2 5.5 1.7 2.2-.3 3.5-1.3 3.5-2.3v-1.4"/><ellipse cx="17" cy="11.5" rx="4.5" ry="2"/><path d="M12.5 11.5V16c0 1.1 2 2 4.5 2s4.5-.9 4.5-2v-4.5"/>',
+};
+function icon(name, cls = "") {
+  return `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+}
+
+const THEMES = [["auto", "Automático", "auto"], ["light", "Claro", "sun"], ["dark", "Oscuro", "moon"]];
+function currentTheme() {
+  const t = localStorage.getItem("dd_theme");
+  return THEMES.some((x) => x[0] === t) ? t : "auto";
+}
+function applyTheme(t) {
+  const pref = THEMES.some((x) => x[0] === t) ? t : "auto";
+  localStorage.setItem("dd_theme", pref);
+  if (pref === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", pref);
+  const dark = pref === "dark" || (pref === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.querySelector('meta[name="theme-color"]').content = dark ? "#0d0d0f" : "#ffffff";
+}
+
+/* -------------------------- arranque sin parpadeo ------------------------
+   Con una sesion guardada se entra directo, de forma sincrona, antes de que el
+   navegador pinte nada. La sesion se valida igual, pero en segundo plano. */
+if (S.token && S.me) {
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  document.body.classList.remove("no-nav");
+}
+
+/* --------------------------------- API ---------------------------------- */
+async function api(path, { method = "GET", body } = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: {
+        ...(body ? { "content-type": "application/json" } : {}),
+        ...(S.token ? { "x-session-token": S.token } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error("Sin conexión. Revisa tu internet e intenta de nuevo.");
+  }
+  let data = {};
+  try { data = await res.json(); } catch {}
+  if (res.status === 401 && S.token) { logout(); throw new Error("Sesión expirada. Vuelve a entrar."); }
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
+}
+
+/* --------------------------- avisos y preguntas -------------------------- */
+let toastTimer = null;
+function toast(text, kind = "ok") {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
+  const el = document.createElement("div");
+  el.className = `toast ${kind === "err" ? "err" : ""}`;
+  el.setAttribute("role", "status");
+  el.innerHTML = icon(kind === "err" ? "info" : "check") + `<span>${esc(text)}</span>`;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.remove(), kind === "err" ? 4000 : 2600);
+}
+
+// Pregunta de si/no. Reemplaza a confirm(): el nativo se ve mal en el celular y
+// congela la pagina entera mientras esta abierto.
+function ask({ title, text = "", ok = "Aceptar", cancel = "Cancelar", danger = false }) {
+  return new Promise((resolve) => {
+    const root = $("dialogRoot");
+    root.innerHTML = `
+      <div class="modal dlg" role="dialog" aria-modal="true">
+        <div class="dlg-box">
+          <h3>${esc(title)}</h3>
+          ${text ? `<p>${esc(text)}</p>` : ""}
+          <div class="dlg-actions">
+            <button class="btn" data-r="0">${esc(cancel)}</button>
+            <button class="btn ${danger ? "solid-danger" : "primary"}" data-r="1">${esc(ok)}</button>
+          </div>
+        </div>
+      </div>`;
+    const done = (v) => { document.removeEventListener("keydown", onKey); root.innerHTML = ""; resolve(v); };
+    const onKey = (e) => { if (e.key === "Escape") done(false); else if (e.key === "Enter") done(true); };
+    document.addEventListener("keydown", onKey);
+    root.querySelectorAll("[data-r]").forEach((b) => b.addEventListener("click", () => done(b.dataset.r === "1")));
+    root.querySelector(".modal").addEventListener("click", (e) => { if (e.target.classList.contains("modal")) done(false); });
+    root.querySelector('[data-r="1"]').focus();
+  });
+}
+
+function openModal(html) {
+  $("modalRoot").innerHTML = `
+    <div class="modal">
+      <div class="sheet">
+        <button class="btn sm" id="modalClose" style="float:right; margin-left:10px;">Cerrar</button>
+        ${html}
+      </div>
+    </div>`;
+  $("modalClose").addEventListener("click", closeModal);
+  $("modalRoot").querySelector(".modal").addEventListener("click", (e) => {
+    if (e.target.classList.contains("modal")) closeModal();
+  });
+}
+function closeModal() { $("modalRoot").innerHTML = ""; }
+const showErr = (id, err) => { $(id).innerHTML = `<div class="msg err">${esc(err.message || err)}</div>`; };
+
+/* ===========================================================================
+   Entrar, crear cuenta, recuperar
+   =========================================================================== */
+let signupMode = false;
+$("switchMode").addEventListener("click", () => {
+  signupMode = !signupMode;
+  $("fullField").classList.toggle("hidden", !signupMode);
+  $("loginSubmit").textContent = signupMode ? "Crear cuenta" : "Entrar";
+  $("switchText").textContent = signupMode ? "¿Ya tienes cuenta?" : "¿Primera vez?";
+  $("switchMode").textContent = signupMode ? "Entrar" : "Crear mi cuenta";
+  $("forgotRow").classList.toggle("hidden", signupMode);
+  $("loginMsg").innerHTML = "";
+});
+$("forgotBtn").addEventListener("click", recoverScreen);
+
+function saveSession(r) {
+  S.token = r.token; S.me = r.user; S.account = r.account || null;
+  localStorage.setItem("dd_token", S.token);
+  localStorage.setItem("dd_me", JSON.stringify(S.me));
+  localStorage.setItem("dd_account", JSON.stringify(S.account));
+}
+
+$("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("loginSubmit");
+  btn.disabled = true; $("loginMsg").innerHTML = "";
+  try {
+    const r = signupMode
+      ? await api("/api/auth?signup=1", { method: "POST", body: {
+          name: $("loginName").value.trim(), password: $("loginPw").value, fullName: $("loginFull").value.trim() } })
+      : await api("/api/auth", { method: "POST", body: { name: $("loginName").value.trim(), password: $("loginPw").value } });
+    saveSession(r);
+    $("loginPw").value = "";
+    S.recovery = r.recovery ? { has: true, at: null } : S.recovery;
+    await start();
+    // Cuenta recien creada: primero el codigo de recuperacion (unica vez que se
+    // puede ver) y despues a crear la primera deuda.
+    if (r.created && r.recovery) codigoScreen(r.recovery, { luego: () => debtForm(null) });
+  } catch (err) {
+    showErr("loginMsg", err);
+  } finally { btn.disabled = false; }
+});
+
+function recoverScreen() {
+  openModal(`
+    <h2>Entrar con el código</h2>
+    <p class="muted" style="margin:-6px 0 14px;">
+      Es el código de recuperación que guardaste al crear la cuenta. Sirve una sola vez:
+      te deja poner una contraseña nueva y te entrega otro código para la próxima.
+    </p>
+    <form id="rForm" class="card pad">
+      <label class="field"><span>Usuario</span><input id="rName" required maxlength="20" autocapitalize="none" spellcheck="false"></label>
+      <label class="field"><span>Código de recuperación</span><input id="rCode" required placeholder="XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false"></label>
+      <label class="field"><span>Nueva contraseña (mínimo 6)</span><input id="rPw" type="password" required minlength="6" maxlength="64" autocomplete="new-password"></label>
+      <div id="rMsg"></div>
+      <button class="btn primary wide" type="submit">Entrar y cambiar la contraseña</button>
+    </form>
+    <p class="muted" style="margin:14px 0 0;">¿No lo tienes? Si alguien te dio acceso a su cuenta, esa persona puede ponerte una contraseña nueva desde <b>Ajustes → Usuarios</b>.</p>
+  `);
+  $("rForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      const r = await api("/api/auth?recover=1", { method: "POST", body: { name: $("rName").value.trim(), code: $("rCode").value, password: $("rPw").value } });
+      saveSession(r);
+      S.recovery = { has: true, at: null };
+      closeModal();
+      await start();
+      toast("Contraseña cambiada");
+      if (r.recovery) codigoScreen(r.recovery);
+    } catch (err) { showErr("rMsg", err); } finally { btn.disabled = false; }
+  });
+}
+
+function logout() {
+  S.token = ""; S.me = null; S.account = null; S.sum = null; S.entries = null;
+  S.view = "home"; S.simScen = null;     // quien entre despues arranca en el resumen
+  ["dd_token", "dd_me", "dd_account"].forEach((k) => localStorage.removeItem(k));
+  closeModal();
+  $("app").classList.add("hidden");
+  $("login").classList.remove("hidden");
+  document.body.classList.add("no-nav");
+}
+
+/* ------------------------------ instalacion ------------------------------ */
+let promptInstalar = null;
+const yaInstalada = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const esIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); promptInstalar = e; if (S.view === "settings") renderSettings(); });
+addEventListener("appinstalled", () => { promptInstalar = null; toast("Aplicación instalada"); if (S.view === "settings") renderSettings(); });
+async function instalarApp() {
+  if (promptInstalar) {
+    promptInstalar.prompt();
+    const { outcome } = await promptInstalar.userChoice;
+    if (outcome === "accepted") promptInstalar = null;
+    return;
+  }
+  openModal(`
+    <h2>Instalar la aplicación</h2>
+    ${esIOS() ? `
+      <p class="muted">En iPhone se instala desde el propio Safari:</p>
+      <div class="card">
+        <div class="list-item"><span class="grow">1. Toca el botón <b>Compartir</b> (el cuadrito con la flecha hacia arriba).</span></div>
+        <div class="list-item"><span class="grow">2. Baja y elige <b>Añadir a pantalla de inicio</b>.</span></div>
+        <div class="list-item"><span class="grow">3. Toca <b>Añadir</b>. Queda como una app más.</span></div>
+      </div>` : `
+      <p class="muted">En Android, desde Chrome:</p>
+      <div class="card">
+        <div class="list-item"><span class="grow">1. Toca el menú <b>⋮</b> arriba a la derecha.</span></div>
+        <div class="list-item"><span class="grow">2. Elige <b>Instalar aplicación</b> (o <b>Añadir a pantalla de inicio</b>).</span></div>
+      </div>
+      <p class="muted" style="margin-top:12px;">Si no aparece, es que ya está instalada o el navegador todavía no la reconoce: cierra y vuelve a abrir la página.</p>`}
+  `);
+}
+
+/* ===========================================================================
+   Arranque y navegacion
+   =========================================================================== */
+async function start() {
+  $("meBtn").textContent = initials(S.me?.fullName || S.me?.name);
+  $("login").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  document.body.classList.remove("no-nav");
+  await refresh();
+  setView(S.view);
+}
+
+// Vuelve a pedir el resumen (deudas, movimientos, comentarios). Es la unica
+// fuente de verdad de la app: despues de cualquier cambio se llama a esto.
+async function refresh() {
+  try {
+    S.sum = await api("/api/summary");
+  } catch (err) {
+    if (!S.sum) $("homeBody").innerHTML = `<div class="msg err">${esc(err.message)}</div>`;
+    throw err;
+  }
+  const debts = S.sum.debts;
+  if (!debts.some((d) => d.id === S.debtId)) S.debtId = debts[0]?.id || null;
+  if (S.debtId) localStorage.setItem("dd_debt", S.debtId); else localStorage.removeItem("dd_debt");
+  // Moneda del resumen: la que tenga mas deudas activas (empate: cordobas).
+  const activas = debts.filter((d) => d.active);
+  const cuenta = (c) => activas.filter((d) => d.currencies.includes(c)).length;
+  const curs = [...new Set(activas.flatMap((d) => d.currencies))].sort((a, b) => cuenta(b) - cuenta(a) || (a === "NIO" ? -1 : 1));
+  if (!curs.includes(S.homeCur)) S.homeCur = curs[0] || "NIO";
+  paintHeader();
+}
+
+function paintHeader() {
+  const d = currentDebt();
+  if (S.view === "debt" && d) {
+    $("headLbl").textContent = "Deuda";
+    $("headVal").textContent = d.name;
+  } else {
+    $("headLbl").textContent = { home: "Resumen", sim: "Simular pagos", settings: "Ajustes" }[S.view] || "Deudas";
+    $("headVal").textContent = S.account?.name || "Deudas";
+  }
+}
+
+document.querySelectorAll("nav.bottom button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
+$("meBtn").addEventListener("click", () => setView("settings"));
+
+function setView(v) {
+  S.view = v;
+  document.querySelectorAll("nav.bottom button").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
+  for (const [name, el] of Object.entries({ home: $("viewHome"), debt: $("viewDebt"), sim: $("viewSim"), settings: $("viewSettings") })) {
+    el.classList.toggle("hidden", name !== v);
+  }
+  window.scrollTo(0, 0);
+  paintHeader();
+  if (v === "home") renderHome();
+  if (v === "debt") loadDebt();
+  if (v === "sim") renderSim();
+  if (v === "settings") renderSettings();
+}
+
+// Abre una deuda en su pestaña.
+function openDebt(id, tab = null) {
+  S.debtId = id;
+  localStorage.setItem("dd_debt", id);
+  S.entries = null;
+  if (tab) S.debtTab = tab;
+  setView("debt");
+}
+
+/* ===========================================================================
+   Series para los graficos (a partir de los movimientos crudos del resumen)
+   =========================================================================== */
+// Saldo al cierre de cada mes: todo lo prestado menos todo lo abonado hasta ahi.
+function balanceByMonth(entries, months) {
+  return months.map((m) => entries.reduce((acc, e) => (monthKey(e.day) <= m ? acc + (e.kind === "loan" ? e.amount : -e.amount) : acc), 0));
+}
+// Cuanto se presto y cuanto se abono en cada mes.
+function flowsByMonth(entries, months) {
+  const loan = months.map(() => 0), payment = months.map(() => 0);
+  for (const e of entries) {
+    const i = months.indexOf(monthKey(e.day));
+    if (i < 0) continue;
+    (e.kind === "loan" ? loan : payment)[i] += e.amount;
+  }
+  return { loan, payment };
+}
+
+/* ===========================================================================
+   Graficos en SVG, sin librerias.
+
+   Marcas finas (lineas de 2px, barras de <=24px con la punta redondeada),
+   rejilla hairline solida, ejes recesivos y un solo eje Y. El hover lo lleva
+   una capa transparente: al pasar el dedo se marca la posicion mas cercana y
+   se muestran TODAS las series en un tooltip. Cada grafico tiene su tabla
+   gemela (details) para leerlo sin color y sin hover.
+   =========================================================================== */
+// Ticks "bonitos" del eje Y: 0, 1000, 2000... segun el maximo.
+function niceTicks(max, n = 4) {
+  if (max <= 0) return [0, 1, 2, 3, 4].map((i) => i * 0.25);
+  const raw = max / n;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((s) => s >= raw) || raw;
+  const ticks = [];
+  for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(v);
+  if (ticks[ticks.length - 1] < max) ticks.push(ticks[ticks.length - 1] + step);
+  return ticks;
+}
+// Indices de etiquetas X que caben (a lo sumo `max`), siempre la primera y la ultima.
+function pickLabels(n, max = 6) {
+  if (n <= max) return [...Array(n).keys()];
+  const step = Math.ceil((n - 1) / (max - 1));
+  const out = [];
+  for (let i = 0; i < n; i += step) out.push(i);
+  // La ultima etiqueta siempre va; si la anterior le queda encima, se quita.
+  if (out[out.length - 1] !== n - 1) {
+    if (n - 1 - out[out.length - 1] < step / 2) out.pop();
+    out.push(n - 1);
+  }
+  return out;
+}
+const legendHtml = (series, shape = "ln") => series.length < 2 ? "" :
+  `<div class="legend">${series.map((s) => `<span><i class="${shape === "sq" ? "sq" : ""}" style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div>`;
+
+// Grafico de lineas. series: [{ name, color, values[] }], labels: texto de cada X.
+function lineChart(el, { series, labels, fmt = fmtCompact, fmtFull = (v) => nfMoney.format(v), height = 200 }) {
+  const W = 600, H = height, ML = 46, MR = 14, MT = 12, MB = 26;
+  const n = labels.length;
+  const max = Math.max(0, ...series.flatMap((s) => s.values.filter((v) => v != null)));
+  const ticks = niceTicks(max);
+  const top = ticks[ticks.length - 1] || 1;
+  const x = (i) => ML + (n > 1 ? (i / (n - 1)) * (W - ML - MR) : (W - ML - MR) / 2);
+  const y = (v) => MT + (1 - v / top) * (H - MT - MB);
+  const path = (vals) => {
+    let d = "", pen = false;
+    vals.forEach((v, i) => { if (v == null) { pen = false; return; } d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `; pen = true; });
+    return d;
+  };
+  const lastIdx = (vals) => { for (let i = vals.length - 1; i >= 0; i--) if (vals[i] != null) return i; return -1; };
+  const lbls = pickLabels(n);
+  el.innerHTML = `${legendHtml(series)}
+    <div class="chart-box">
+    <svg viewBox="0 0 ${W} ${H}" role="img">
+      <g class="grid">${ticks.map((t) => `<line x1="${ML}" x2="${W - MR}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>`).join("")}</g>
+      <g class="axis"><line x1="${ML}" x2="${W - MR}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/></g>
+      ${ticks.map((t) => `<text x="${ML - 8}" y="${(y(t) + 3.5).toFixed(1)}" text-anchor="end">${esc(fmt(t))}</text>`).join("")}
+      ${lbls.map((i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="${i === 0 && n > 1 ? "start" : i === n - 1 && n > 1 ? "end" : "middle"}">${esc(labels[i])}</text>`).join("")}
+      ${series.map((s) => `<path class="ln" d="${path(s.values)}" stroke="${s.color}"/>`).join("")}
+      ${series.map((s) => { const i = lastIdx(s.values); return i < 0 ? "" : `<circle class="dot" cx="${x(i).toFixed(1)}" cy="${y(s.values[i]).toFixed(1)}" r="4" fill="${s.color}"/>`; }).join("")}
+      <g class="hov"></g>
+      <rect class="hit" x="${ML}" y="0" width="${W - ML - MR}" height="${H}"/>
+    </svg>
+    <div class="tip hidden"></div>
+    </div>`;
+  attachHover(el, { n, x, y: (i, s) => y(s.values[i]), series, labels, fmtFull, W, ML, MR, H, MT, MB });
+}
+
+// Barras agrupadas. series: [{ name, color, values[] }].
+function barChart(el, { series, labels, fmt = fmtCompact, fmtFull = (v) => nfMoney.format(v), height = 200 }) {
+  const W = 600, H = height, ML = 46, MR = 14, MT = 12, MB = 26;
+  const n = labels.length;
+  const max = Math.max(0, ...series.flatMap((s) => s.values));
+  const ticks = niceTicks(max);
+  const top = ticks[ticks.length - 1] || 1;
+  const band = (W - ML - MR) / n;
+  const y = (v) => MT + (1 - v / top) * (H - MT - MB);
+  const bw = Math.min(24, Math.max(3, (band * 0.7 - 2 * (series.length - 1)) / series.length));
+  const groupW = bw * series.length + 2 * (series.length - 1);
+  const x0 = (i) => ML + band * i + (band - groupW) / 2;
+  const lbls = pickLabels(n);
+  // Barra con la punta redondeada (4px) y la base cuadrada, pegada a la linea cero.
+  const bar = (bx, v, color) => {
+    const h = y(0) - y(v);
+    if (h <= 0) return "";
+    const r = Math.min(4, h, bw / 2);
+    const yt = y(v);
+    return `<path class="bar" fill="${color}" d="M${bx.toFixed(1)},${y(0).toFixed(1)} V${(yt + r).toFixed(1)} Q${bx.toFixed(1)},${yt.toFixed(1)} ${(bx + r).toFixed(1)},${yt.toFixed(1)} H${(bx + bw - r).toFixed(1)} Q${(bx + bw).toFixed(1)},${yt.toFixed(1)} ${(bx + bw).toFixed(1)},${(yt + r).toFixed(1)} V${y(0).toFixed(1)} Z"/>`;
+  };
+  el.innerHTML = `${legendHtml(series, "sq")}
+    <div class="chart-box">
+    <svg viewBox="0 0 ${W} ${H}" role="img">
+      <g class="grid">${ticks.map((t) => `<line x1="${ML}" x2="${W - MR}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>`).join("")}</g>
+      ${ticks.map((t) => `<text x="${ML - 8}" y="${(y(t) + 3.5).toFixed(1)}" text-anchor="end">${esc(fmt(t))}</text>`).join("")}
+      ${lbls.map((i) => `<text x="${(ML + band * i + band / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle">${esc(labels[i])}</text>`).join("")}
+      ${series.map((s, k) => s.values.map((v, i) => bar(x0(i) + k * (bw + 2), v, s.color)).join("")).join("")}
+      <g class="axis"><line x1="${ML}" x2="${W - MR}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/></g>
+      <g class="hov"></g>
+      <rect class="hit" x="${ML}" y="0" width="${W - ML - MR}" height="${H}"/>
+    </svg>
+    <div class="tip hidden"></div>
+    </div>`;
+  attachHover(el, { n, x: (i) => ML + band * i + band / 2, y: null, series, labels, fmtFull, W, ML, MR, H, MT, MB, bandW: band });
+}
+
+// Capa de hover comun: crosshair (o resaltado de la banda) + tooltip con todas
+// las series en esa X. Funciona con dedo y con raton.
+function attachHover(el, { n, x, y, series, labels, fmtFull, W, ML, MR, H, MT, MB, bandW = 0 }) {
+  const box = el.querySelector(".chart-box"), svg = box.querySelector("svg"), hov = svg.querySelector(".hov"), tip = box.querySelector(".tip"), hit = svg.querySelector(".hit");
+  const show = (i) => {
+    const px = x(i);
+    hov.innerHTML = bandW
+      ? `<rect x="${(px - bandW / 2).toFixed(1)}" y="${MT}" width="${bandW.toFixed(1)}" height="${H - MT - MB}" fill="currentColor" opacity=".06"/>`
+      : `<line class="cross" x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="${MT}" y2="${H - MB}"/>` +
+        series.map((s) => s.values[i] == null ? "" : `<circle class="hover-dot" cx="${px.toFixed(1)}" cy="${y(i, s).toFixed(1)}" r="5" fill="${s.color}"/>`).join("");
+    tip.innerHTML = `<div class="t">${esc(labels[i])}</div>` + series.map((s) =>
+      `<div class="r"><span><i style="background:${s.color}"></i>${esc(s.name)}</span><b>${s.values[i] == null ? "—" : esc(fmtFull(s.values[i]))}</b></div>`).join("");
+    tip.classList.remove("hidden");
+    // Posicion en pixeles reales (el SVG escala con el ancho).
+    const rect = svg.getBoundingClientRect(), scale = rect.width / W;
+    let left = px * scale;
+    const tw = tip.offsetWidth;
+    left = Math.max(tw / 2 + 2, Math.min(rect.width - tw / 2 - 2, left));
+    tip.style.left = left + "px";
+    tip.style.top = Math.max(0, MT * scale - 6) + "px";
+  };
+  const hide = () => { hov.innerHTML = ""; tip.classList.add("hidden"); };
+  const onMove = (e) => {
+    const rect = svg.getBoundingClientRect();
+    const vx = ((e.clientX - rect.left) / rect.width) * W;
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < n; i++) { const d = Math.abs(x(i) - vx); if (d < bd) { bd = d; best = i; } }
+    show(best);
+  };
+  hit.addEventListener("pointermove", onMove);
+  hit.addEventListener("pointerdown", onMove);
+  hit.addEventListener("pointerleave", hide);
+}
+
+// Tabla gemela de un grafico (se pliega): la misma informacion sin color ni hover.
+function chartTable(labels, series, fmtFull = (v) => nfMoney.format(v), title = "Ver como tabla") {
+  return `
+    <details class="plain card" style="margin-top:10px;">
+      <summary>${icon("chevron")}${esc(title)}</summary>
+      <div class="scroll-x"><table class="tbl">
+        <thead><tr><th></th>${series.map((s) => `<th>${esc(s.name)}</th>`).join("")}</tr></thead>
+        <tbody>${labels.map((l, i) => `<tr><td>${esc(l)}</td>${series.map((s) => `<td>${s.values[i] == null ? "—" : esc(fmtFull(s.values[i]))}</td>`).join("")}</tr>`).join("")}</tbody>
+      </table></div>
+    </details>`;
+}
+const SERIES = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)", "var(--s6)"];
+
+/* ===========================================================================
+   Vista: resumen
+   =========================================================================== */
+function renderHome() {
+  if (!S.sum) return;
+  const debts = S.sum.debts.filter((d) => d.active);
+  const closed = S.sum.debts.filter((d) => !d.active);
+  const body = $("homeBody");
+
+  if (!debts.length) {
+    body.innerHTML = isAdmin()
+      ? `<div class="card" style="margin-top:18px;">${emptyState("wallet", "Todavía no tienes ninguna deuda registrada.<br>Crea la primera: con tu hermano, una tarjeta, lo que sea.")}
+           <div class="pad" style="padding-top:0;"><button class="btn primary wide" id="homeNew">${icon("plus")}Crear una deuda</button></div></div>`
+      : `<div class="card" style="margin-top:18px;">${emptyState("eye", "Todavía no te compartieron ninguna deuda.<br>Cuando lo hagan, aparecerá aquí.")}</div>`;
+    $("homeNew")?.addEventListener("click", () => debtForm(null));
+    return;
+  }
+
+  const curs = [...new Set(debts.flatMap((d) => d.currencies))];
+  if (curs.includes("NIO") && curs.includes("USD")) curs.sort((a) => (a === "NIO" ? -1 : 1));
+  const cur = curs.includes(S.homeCur) ? S.homeCur : curs[0];
+  // Las deudas que tienen algo en esta moneda (una deuda puede estar en las dos).
+  const mine = debts.filter((d) => d.totals[cur]);
+  const tot = mine.reduce((a, d) => ({ loaned: a.loaned + d.totals[cur].loaned, paid: a.paid + d.totals[cur].paid, balance: a.balance + d.totals[cur].balance }), { loaned: 0, paid: 0, balance: 0 });
+  const months = lastMonths(12);
+  const enCur = S.sum.entries.filter((e) => e.currency === cur);
+  const entriesOf = (d) => enCur.filter((e) => e.debtId === d.id);
+  // Una linea por deuda si son pocas (el color sigue a la deuda); si no, el total.
+  const series = mine.length >= 2 && mine.length <= 4
+    ? mine.map((d, i) => ({ name: d.name, color: SERIES[i], values: balanceByMonth(entriesOf(d), months) }))
+    : [{ name: "Saldo total", color: SERIES[0], values: balanceByMonth(enCur.filter((e) => mine.some((d) => d.id === e.debtId)), months) }];
+  const labels = months.map(monthLabel);
+  const hayMovs = enCur.some((e) => mine.some((d) => d.id === e.debtId));
+
+  const card = (d) => {
+    const c = debtCurOf(d, cur), t = d.totals[c];
+    const saldada = d.entries > 0 && d.currencies.every((k) => d.totals[k].balance <= 0);
+    return `
+    <button class="debt-card" data-debt="${d.id}">
+      <div class="top">
+        <div class="kind">${icon(KIND_META[d.kind]?.icon || "wallet")}</div>
+        <div class="grow">
+          <div class="name ellip">${esc(d.name)}</div>
+          <div class="who ellip">${esc(d.counterpart || KIND_META[d.kind]?.label || "")}${d.lastDay ? ` · último mov. ${prettyDay(d.lastDay)}` : " · sin movimientos"}</div>
+        </div>
+        <div class="bal">${d.currencies.map((k) => `<b>${money(Math.max(0, d.totals[k].balance), k)}</b>`).join("")}<small>${saldada ? "saldada" : "debo"}</small></div>
+      </div>
+      <div class="meter"><i style="width:${pct(t.paid, t.loaned)}%"></i></div>
+      <div class="foot"><span>Prestado ${money(t.loaned, c)}</span><span>Abonado ${money(t.paid, c)} · ${pct(t.paid, t.loaned)}%</span></div>
+    </button>`;
+  };
+
+  body.innerHTML = `
+    ${curs.length > 1 ? `<div class="chips" style="margin:16px 0 0;">${curs.map((c) => `<button class="chip ${c === cur ? "on" : ""}" data-cur="${c}">${CUR[c].sym} ${CUR[c].label}</button>`).join("")}</div>` : ""}
+    <div class="card hero" style="margin-top:14px;">
+      <div class="lbl">Debo en total${curs.length > 1 ? ` (${CUR[cur].label})` : ""}</div>
+      <div class="val"><small>${CUR[cur].sym}</small>${nfMoney.format(Math.max(0, tot.balance))}</div>
+      <div class="sub">${plural(mine.length, "deuda", "deudas")} en ${CUR[cur].label} · ${pct(tot.paid, tot.loaned)}% pagado de lo prestado</div>
+    </div>
+    <div class="tiles" style="margin-top:8px;">
+      <div class="tile"><div class="lbl">Prestado</div><div class="val">${money(tot.loaned, cur)}</div></div>
+      <div class="tile"><div class="lbl">Abonado</div><div class="val good">${money(tot.paid, cur)}</div></div>
+      <div class="tile"><div class="lbl">Por pagar</div><div class="val bad">${money(Math.max(0, tot.balance), cur)}</div></div>
+    </div>
+
+    ${hayMovs ? `
+    <div class="card pad" style="margin-top:14px;">
+      <p class="chart-title">Cómo ha ido el saldo</p>
+      <p class="chart-sub">Últimos 12 meses, al cierre de cada mes · ${CUR[cur].label}</p>
+      <div id="homeChart"></div>
+      ${chartTable(labels, series)}
+    </div>` : ""}
+
+    <div class="sec-head"><h2>Mis deudas</h2>${isAdmin() ? `<button class="btn sm" id="homeNew">${icon("plus")}Nueva</button>` : ""}</div>
+    ${debts.map(card).join("")}
+    ${closed.length ? `<p class="muted" style="text-align:center; margin:4px 0 0;"><button class="link" style="font-weight:500; color:var(--muted);" id="homeClosed">Ver ${plural(closed.length, "deuda cerrada", "deudas cerradas")}</button></p>` : ""}
+
+    ${S.sum.comments.length ? `
+    <h3>Últimos comentarios</h3>
+    <div class="card">
+      ${S.sum.comments.map((c) => `
+        <button class="list-item" data-cdebt="${c.debtId}" style="align-items:flex-start;">
+          ${icon("chat")}
+          <div class="grow">
+            <div class="muted" style="margin-bottom:2px;"><b style="color:var(--ink);">${esc(c.userName)}</b> en ${esc(c.debtName)} · ${fechaHora(c.createdAt)}</div>
+            <div style="font-size:14.5px; white-space:pre-wrap; word-break:break-word;">${esc(c.text)}</div>
+          </div>
+        </button>`).join("")}
+    </div>` : ""}`;
+
+  if (hayMovs) lineChart($("homeChart"), { series, labels, fmtFull: (v) => money(v, cur) });
+  body.querySelectorAll("[data-cur]").forEach((b) => b.addEventListener("click", () => { S.homeCur = b.dataset.cur; renderHome(); }));
+  body.querySelectorAll("[data-debt]").forEach((b) => b.addEventListener("click", () => openDebt(Number(b.dataset.debt))));
+  body.querySelectorAll("[data-cdebt]").forEach((b) => b.addEventListener("click", () => openDebt(Number(b.dataset.cdebt), "comments")));
+  $("homeNew")?.addEventListener("click", () => debtForm(null));
+  $("homeClosed")?.addEventListener("click", debtsScreen);
+}
+
+/* ===========================================================================
+   Vista: una deuda
+   =========================================================================== */
+async function loadDebt() {
+  const d = currentDebt();
+  const body = $("debtBody");
+  if (!d) {
+    body.innerHTML = `<div class="card" style="margin-top:18px;">${emptyState("wallet", isAdmin() ? "No hay ninguna deuda abierta.<br>Créala desde el Resumen." : "Todavía no te compartieron ninguna deuda.")}</div>`;
+    return;
+  }
+  if (!S.entries || S.entries.debtId !== d.id) {
+    try {
+      const { entries } = await api(`/api/entries?debtId=${d.id}`);
+      S.entries = { debtId: d.id, list: entries };
+    } catch (err) { body.innerHTML = `<div class="msg err">${esc(err.message)}</div>`; return; }
+  }
+  renderDebt();
+}
+
+// Del mas viejo al mas nuevo (fecha y, a igual fecha, orden de registro).
+const cronologico = (list) => [...list].sort((a, b) => (a.day + String(a.id).padStart(9, "0")).localeCompare(b.day + String(b.id).padStart(9, "0")));
+
+// Saldo despues de cada movimiento, llevado POR MONEDA.
+function withRunning(list) {
+  const bal = {};
+  const run = new Map();
+  for (const e of cronologico(list)) {
+    bal[e.currency] = (bal[e.currency] || 0) + (e.kind === "loan" ? e.amount : -e.amount);
+    run.set(e.id, Math.round(bal[e.currency] * 100) / 100);
+  }
+  return run;
+}
+
+function renderDebt() {
+  const d = currentDebt();
+  if (!d || !S.entries) return;
+  const admin = isAdmin();
+  const list = S.entries.list;
+  const cur = debtCurOf(d, S.debtCur);
+  const t = d.totals[cur];
+  const varias = d.currencies.length > 1;
+  // Comentarios sobre movimientos (los generales se ven al abrir la pestaña).
+  const nComments = list.reduce((a, e) => a + e.comments, 0);
+  const tab = S.debtTab;
+
+  $("debtBody").innerHTML = `
+    <div class="row" style="margin:16px 0 0; gap:8px; align-items:flex-start;">
+      <button class="grow" id="debtPick" style="background:none; border:0; text-align:left; padding:0; color:inherit; min-width:0;">
+        <div class="row" style="gap:6px;"><h2 class="ellip" style="margin:0;">${esc(d.name)}</h2>${icon("chevdown", "")}</div>
+        <div class="muted ellip">${esc(d.counterpart || KIND_META[d.kind]?.label || "")}${d.note ? ` · ${esc(d.note)}` : ""}</div>
+      </button>
+      ${admin ? `<button class="btn sm" id="debtEdit" aria-label="Editar deuda">${icon("edit")}</button>` : ""}
+    </div>
+    <div class="chips" style="margin:8px 0 12px;">
+      <span class="badge">${KIND_META[d.kind]?.label || d.kind}</span>
+      ${varias ? "" : `<span class="badge">${CUR[cur].label}</span>`}
+      ${d.interestRate ? `<span class="badge warn">${d.interestRate}% anual</span>` : ""}
+      ${!d.active ? `<span class="badge off">cerrada</span>` : ""}
+      ${admin && d.viewers ? `<span class="badge good">${icon("eye")} ${plural(d.viewers, "persona la ve", "personas la ven")}</span>` : ""}
+    </div>
+    ${varias ? `
+    <div class="chips" style="margin:0 0 12px;" id="debtCurs">
+      ${d.currencies.map((c) => `<button class="chip ${c === cur ? "on" : ""}" data-dc="${c}">${CUR[c].sym} ${CUR[c].label} · ${money(Math.max(0, d.totals[c].balance), c)}</button>`).join("")}
+    </div>` : ""}
+
+    <div class="card hero">
+      <div class="lbl">${t.balance <= 0 && t.loaned > 0 ? "Parte saldada" : "Debo actualmente"}${varias ? ` en ${CUR[cur].label}` : ""}</div>
+      <div class="val"><small>${CUR[cur].sym}</small>${nfMoney.format(Math.max(0, t.balance))}</div>
+      <div class="sub">${t.balance < 0 ? `Abonado de más: ${money(-t.balance, cur)} a favor` : `${pct(t.paid, t.loaned)}% pagado de ${money(t.loaned, cur)}`}${varias ? ` · también debo ${d.currencies.filter((c) => c !== cur).map((c) => money(Math.max(0, d.totals[c].balance), c)).join(" y ")}` : ""}</div>
+    </div>
+    <div class="tiles" style="margin-top:8px;">
+      <div class="tile"><div class="lbl">Prestado</div><div class="val">${money(t.loaned, cur)}</div></div>
+      <div class="tile"><div class="lbl">Abonado</div><div class="val good">${money(t.paid, cur)}</div></div>
+      <div class="tile"><div class="lbl">Movimientos</div><div class="val">${list.length}</div></div>
+    </div>
+
+    ${admin && d.active ? `
+      <div class="actions">
+        <button class="btn danger" id="addLoan">${icon("up")}Préstamo</button>
+        <button class="btn good" id="addPay">${icon("down")}Abono</button>
+      </div>` : `<div style="height:12px;"></div>`}
+    <div class="row" style="gap:8px; margin-bottom:6px;">
+      <button class="btn sm grow" id="pdfBtn">${icon("download")}Estado de cuenta</button>
+      <button class="btn sm grow" id="waBtn">${icon("whatsapp")}Resumen</button>
+    </div>
+
+    <div class="tabs" id="debtTabs">
+      <button data-tab="moves" class="${tab === "moves" ? "on" : ""}">Movimientos <span class="cnt">${list.length}</span></button>
+      <button data-tab="chart" class="${tab === "chart" ? "on" : ""}">Gráficos</button>
+      <button data-tab="comments" class="${tab === "comments" ? "on" : ""}">Comentarios${nComments ? ` <span class="cnt">${nComments}</span>` : ""}</button>
+    </div>
+    <div id="debtTab"></div>`;
+
+  $("debtPick").addEventListener("click", pickDebt);
+  $("debtEdit")?.addEventListener("click", () => debtForm(d));
+  $("addLoan")?.addEventListener("click", () => entryForm({ kind: "loan", currency: cur }));
+  $("addPay")?.addEventListener("click", () => entryForm({ kind: "payment", currency: cur }));
+  $("pdfBtn").addEventListener("click", statementScreen);
+  $("waBtn").addEventListener("click", () => shareTexto(resumenTexto(d, list)));
+  $("debtTabs").querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { S.debtTab = b.dataset.tab; renderDebt(); }));
+  $("debtCurs")?.querySelectorAll("[data-dc]").forEach((b) => b.addEventListener("click", () => { S.debtCur = b.dataset.dc; renderDebt(); }));
+
+  if (tab === "moves") renderMoves(d, list);
+  if (tab === "chart") renderDebtCharts(d, list, cur);
+  if (tab === "comments") renderComments(d);
+}
+
+// Elegir otra deuda (las que veo).
+function pickDebt() {
+  const debts = S.sum.debts;
+  openModal(`
+    <h2>Mis deudas</h2>
+    <div class="card">
+      ${debts.map((d) => `
+        <button class="list-item" data-d="${d.id}">
+          ${icon(KIND_META[d.kind]?.icon || "wallet")}
+          <div class="grow">
+            <div class="ellip"><b>${esc(d.name)}</b>${d.active ? "" : ' <span class="badge off">cerrada</span>'}</div>
+            <div class="muted ellip">${esc(d.counterpart || "")}</div>
+          </div>
+          <b class="num" style="text-align:right;">${balances(d, "<br>")}</b>
+          ${d.id === S.debtId ? icon("check", "chev") : icon("chevron", "chev")}
+        </button>`).join("")}
+    </div>
+    ${isAdmin() ? `<button class="btn wide" id="pickNew" style="margin-top:12px;">${icon("plus")}Nueva deuda</button>` : ""}`);
+  $("modalRoot").querySelectorAll("[data-d]").forEach((b) => b.addEventListener("click", () => { closeModal(); openDebt(Number(b.dataset.d)); }));
+  $("pickNew")?.addEventListener("click", () => debtForm(null));
+}
+
+/* ------------------------------ movimientos ------------------------------ */
+function renderMoves(d, list) {
+  const f = S.moveFilter;
+  const shown = list.filter((e) => f === "all" || e.kind === f);
+  const run = withRunning(list);
+  let html = `
+    <div class="chips" style="margin-bottom:12px;">
+      ${[["all", "Todos"], ["loan", "Préstamos"], ["payment", "Abonos"]].map(([k, l]) => `<button class="chip ${f === k ? "on" : ""}" data-f="${k}">${l}</button>`).join("")}
+    </div>`;
+  if (!shown.length) {
+    html += `<div class="card">${emptyState("list", list.length ? "Nada con ese filtro." : isAdmin() ? "Sin movimientos todavía.<br>Registra el primer préstamo con el botón de arriba." : "Sin movimientos todavía.")}</div>`;
+  } else {
+    let mes = null;
+    html += `<div class="card">`;
+    for (const e of shown) {
+      const m = monthKey(e.day);
+      if (m !== mes) { mes = m; html += `<div class="month-head">${monthLong(m)}</div>`; }
+      html += `
+        <button class="entry" data-e="${e.id}">
+          <div class="dir ${e.kind}">${icon(e.kind === "loan" ? "up" : "down")}</div>
+          <div class="grow">
+            <div class="what ellip">${esc(e.reason || (e.kind === "loan" ? "Préstamo" : "Abono"))}</div>
+            <div class="when">${prettyDay(e.day, { year: true })}${e.hasReceipt ? icon("image") : ""}${e.comments ? `<span class="row" style="gap:3px;">${icon("chat")}${e.comments}</span>` : ""}</div>
+          </div>
+          <div class="amt ${e.kind}">${e.kind === "loan" ? "+" : "−"}${money(e.amount, e.currency)}<small>saldo ${money(run.get(e.id), e.currency)}</small></div>
+        </button>`;
+    }
+    html += `</div>`;
+  }
+  $("debtTab").innerHTML = html;
+  $("debtTab").querySelectorAll("[data-f]").forEach((b) => b.addEventListener("click", () => { S.moveFilter = b.dataset.f; renderMoves(d, list); }));
+  $("debtTab").querySelectorAll("[data-e]").forEach((b) => b.addEventListener("click", () => entryDetail(Number(b.dataset.e))));
+}
+
+function renderDebtCharts(d, list, cur) {
+  // Solo los movimientos de la moneda que se esta mirando: no se mezclan.
+  list = list.filter((e) => e.currency === cur);
+  if (!list.length) { $("debtTab").innerHTML = `<div class="card">${emptyState("chart", "Cuando haya movimientos, aquí se ven los gráficos.")}</div>`; return; }
+  const months = lastMonths(12), labels = months.map(monthLabel);
+  const flows = flowsByMonth(list, months);
+  const bars = [{ name: "Préstamos", color: SERIES[0], values: flows.loan }, { name: "Abonos", color: SERIES[2], values: flows.payment }];
+  const bal = [{ name: "Saldo", color: SERIES[0], values: balanceByMonth(list, months) }];
+  $("debtTab").innerHTML = `
+    <div class="card pad">
+      <p class="chart-title">Saldo al cierre de cada mes</p>
+      <p class="chart-sub">Últimos 12 meses · ${CUR[cur].label}</p>
+      <div id="chBal"></div>
+      ${chartTable(labels, bal, (v) => money(v, cur))}
+    </div>
+    <div class="card pad" style="margin-top:12px;">
+      <p class="chart-title">Préstamos y abonos por mes</p>
+      <p class="chart-sub">Cuánto entró y cuánto se pagó cada mes</p>
+      <div id="chFlow"></div>
+      ${chartTable(labels, bars, (v) => money(v, cur))}
+    </div>`;
+  lineChart($("chBal"), { series: bal, labels, fmtFull: (v) => money(v, cur) });
+  barChart($("chFlow"), { series: bars, labels, fmtFull: (v) => money(v, cur) });
+}
+
+/* --------------------------- detalle de un movimiento -------------------- */
+async function entryDetail(id) {
+  const d = currentDebt();
+  const e = S.entries?.list.find((x) => x.id === id);
+  if (!d || !e) return;
+  const admin = isAdmin(), cur = e.currency;
+  openModal(`
+    <div class="row" style="gap:12px; margin-top:6px;">
+      <div class="dir ${e.kind}" style="width:44px; height:44px; border-radius:999px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line); background:var(${e.kind === "loan" ? "--bad-bg" : "--ok-bg"}); color:var(${e.kind === "loan" ? "--bad" : "--ok"});">${icon(e.kind === "loan" ? "up" : "down")}</div>
+      <div class="grow">
+        <div class="muted">${e.kind === "loan" ? "Préstamo" : "Abono"} · ${prettyDayLong(e.day)}</div>
+        <div style="font-size:26px; font-weight:600; letter-spacing:-.02em; color:var(${e.kind === "loan" ? "--bad" : "--ok"});">${e.kind === "loan" ? "+" : "−"}${money(e.amount, cur)}</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <div class="list-item"><span class="muted" style="width:82px; flex:none;">Motivo</span><span class="grow">${esc(e.reason || "—")}</span></div>
+      ${e.note ? `<div class="list-item" style="align-items:flex-start;"><span class="muted" style="width:82px; flex:none;">Nota</span><span class="grow" style="white-space:pre-wrap;">${esc(e.note)}</span></div>` : ""}
+      <div class="list-item"><span class="muted" style="width:82px; flex:none;">Registró</span><span class="grow">${esc(e.createdBy || "—")} · ${fechaHora(e.createdAt)}</span></div>
+    </div>
+    <h3>Comprobante</h3>
+    <div id="edReceipt">${e.hasReceipt ? `<div class="empty" style="padding:20px;">Cargando…</div>` : `<div class="card">${emptyState("image", admin ? "Sin comprobante. Puedes agregarlo editando el movimiento." : "Sin comprobante.")}</div>`}</div>
+    <h3>Comentarios</h3>
+    <div class="card" id="edComments"><div class="empty" style="padding:20px;">Cargando…</div></div>
+    ${admin ? `
+      <div class="row" style="gap:8px; margin-top:16px;">
+        <button class="btn grow" id="edEdit">${icon("edit")}Editar</button>
+        <button class="btn danger grow" id="edDel">${icon("trash")}Borrar</button>
+      </div>` : ""}
+  `);
+  $("edEdit")?.addEventListener("click", () => entryForm(e));
+  $("edDel")?.addEventListener("click", async () => {
+    if (!(await ask({ title: "¿Borrar este movimiento?", text: `${e.kind === "loan" ? "Préstamo" : "Abono"} de ${money(e.amount, cur)} del ${prettyDay(e.day, { year: true })}. Se borran también su comprobante y sus comentarios.`, ok: "Borrar", danger: true }))) return;
+    try {
+      await api(`/api/entries?id=${e.id}`, { method: "DELETE" });
+      closeModal(); toast("Movimiento borrado");
+      S.entries = null; await refresh(); loadDebt();
+    } catch (err) { toast(err.message, "err"); }
+  });
+  commentsThread($("edComments"), d.id, e.id);
+  if (e.hasReceipt) {
+    try {
+      const { image } = await api(`/api/entries?id=${e.id}&receipt=1`);
+      const box = $("edReceipt");
+      if (box) box.innerHTML = `<img class="receipt-view" src="${esc(image)}" alt="Comprobante">`;
+    } catch (err) { const box = $("edReceipt"); if (box) box.innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
+  }
+}
+
+/* ------------------------------ comprobante ------------------------------
+   La captura se achica y se convierte a JPEG en el navegador antes de subirla:
+   lo que llega al servidor son unos cientos de KB y no la foto de 4 MB. JPEG a
+   proposito: es el unico formato que se puede incrustar tal cual en el PDF. */
+const RECEIPT_MAX = 1280;
+async function fileToJpeg(file) {
+  if (!file.type.startsWith("image/")) throw new Error("Elige una imagen.");
+  const uri = await new Promise((ok, fail) => {
+    const fr = new FileReader();
+    fr.onload = () => ok(fr.result);
+    fr.onerror = () => fail(new Error("No se pudo leer el archivo."));
+    fr.readAsDataURL(file);
+  });
+  const img = new Image();
+  await new Promise((ok, fail) => { img.onload = ok; img.onerror = () => fail(new Error("No se pudo leer esa imagen.")); img.src = uri; });
+  const escala = Math.min(1, RECEIPT_MAX / Math.max(img.width, img.height));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(img.width * escala));
+  c.height = Math.max(1, Math.round(img.height * escala));
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  // Se baja la calidad hasta que quepa en el tope del servidor.
+  for (const q of [0.82, 0.7, 0.6, 0.5]) {
+    const out = c.toDataURL("image/jpeg", q);
+    if (out.length < 850 * 1024) return out;
+  }
+  throw new Error("La imagen es demasiado pesada. Prueba con una captura más pequeña.");
+}
+
+/* ----------------------------- alta / edicion ---------------------------- */
+function entryForm(e) {
+  const d = currentDebt();
+  if (!d) return;
+  const isNew = !e.id;
+  const kind = e.kind;
+  const cur = e.currency || d.currency;
+  let receipt = undefined;           // undefined = no tocar, null = quitar, string = nueva
+  openModal(`
+    <h2>${isNew ? (kind === "loan" ? "Nuevo préstamo" : "Nuevo abono") : "Editar movimiento"}</h2>
+    <p class="muted" style="margin:-6px 0 14px;">${esc(d.name)}</p>
+    <form id="eForm" class="card pad">
+      ${isNew ? "" : `
+        <div class="seg" style="margin-bottom:14px;" id="eKind">
+          <button type="button" data-k="loan" class="${kind === "loan" ? "on" : ""}">${icon("up")}Préstamo</button>
+          <button type="button" data-k="payment" class="${kind === "payment" ? "on" : ""}">${icon("down")}Abono</button>
+        </div>`}
+      <div class="two">
+        <label class="field"><span>Monto *</span><input id="eAmount" type="number" inputmode="decimal" step="0.01" min="0.01" required value="${e.amount ?? ""}" placeholder="0.00"></label>
+        <label class="field"><span>Moneda</span>
+          <select id="eCur">${Object.entries(CUR).map(([k, v]) => `<option value="${k}" ${cur === k ? "selected" : ""}>${v.sym} ${v.label}</option>`).join("")}</select></label>
+      </div>
+      <label class="field"><span>Fecha *</span><input id="eDay" type="date" required value="${e.day || todayApp()}" max="${shiftDays(todayApp(), 1)}"></label>
+      <label class="field"><span>Motivo</span><input id="eReason" maxlength="120" value="${esc(e.reason || "")}" placeholder="${kind === "loan" ? "Para la moto, universidad, emergencia…" : "Abono de marzo, transferencia…"}"></label>
+      <label class="field"><span>Nota (opcional)</span><textarea id="eNote" maxlength="500" placeholder="Cualquier detalle que convenga recordar">${esc(e.note || "")}</textarea></label>
+      <div class="field">
+        <span>Comprobante (captura o foto)</span>
+        <div id="eReceiptBox"></div>
+        <input type="file" id="eFile" accept="image/*" class="vhidden">
+      </div>
+      <div id="eMsg"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Registrar" : "Guardar cambios"}</button>
+    </form>
+  `);
+  let curKind = kind;
+  $("eKind")?.querySelectorAll("[data-k]").forEach((b) => b.addEventListener("click", () => {
+    curKind = b.dataset.k;
+    $("eKind").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+  }));
+
+  const paintReceipt = (uri) => {
+    $("eReceiptBox").innerHTML = uri
+      ? `<div class="receipt-thumb"><img src="${esc(uri)}" alt=""><button type="button" class="btn sm" id="eRmReceipt">${icon("cross")}Quitar</button></div>`
+      : `<button type="button" class="receipt-drop" id="eDrop" style="width:100%;">${icon("camera")}<div>${e.hasReceipt && receipt === undefined ? "Ya tiene comprobante. Toca para reemplazarlo" : "Tocar para elegir una imagen"}</div></button>`;
+    $("eDrop")?.addEventListener("click", () => $("eFile").click());
+    $("eRmReceipt")?.addEventListener("click", () => { receipt = null; paintReceipt(null); });
+  };
+  // Al editar, se enseña el comprobante actual si lo hay.
+  if (!isNew && e.hasReceipt) {
+    paintReceipt(null);
+    api(`/api/entries?id=${e.id}&receipt=1`).then(({ image }) => { if (receipt === undefined && $("eReceiptBox")) paintReceipt(image); }).catch(() => {});
+  } else paintReceipt(null);
+  $("eFile").addEventListener("change", async () => {
+    const f = $("eFile").files[0];
+    if (!f) return;
+    try { receipt = await fileToJpeg(f); paintReceipt(receipt); }
+    catch (err) { showErr("eMsg", err); }
+    $("eFile").value = "";
+  });
+
+  $("eForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true; $("eMsg").innerHTML = "";
+    const body = { day: $("eDay").value, amount: $("eAmount").value, currency: $("eCur").value, reason: $("eReason").value, note: $("eNote").value };
+    if (receipt !== undefined) body.receipt = receipt;
+    try {
+      if (isNew) await api("/api/entries", { method: "POST", body: { ...body, debtId: d.id, kind } });
+      else await api(`/api/entries?id=${e.id}`, { method: "PUT", body: { ...body, kind: curKind } });
+      closeModal(); toast(isNew ? (kind === "loan" ? "Préstamo registrado" : "Abono registrado") : "Guardado");
+      S.entries = null; await refresh(); loadDebt();
+    } catch (err) { showErr("eMsg", err); btn.disabled = false; }
+  });
+}
+
+/* ------------------------------ comentarios ------------------------------ */
+// Hilo de comentarios con su cajita para escribir. entryId null = generales.
+async function commentsThread(box, debtId, entryId) {
+  let comments;
+  try { ({ comments } = await api(`/api/comments?debtId=${debtId}${entryId ? `&entryId=${entryId}` : ""}`)); }
+  catch (err) { box.innerHTML = `<div class="msg err">${esc(err.message)}</div>`; return; }
+  const paint = () => {
+    box.innerHTML = `
+      ${comments.length ? comments.map((c) => `
+        <div class="cmt">
+          <div class="head"><b>${esc(c.userName)}</b>${c.role === "admin" ? '<span class="badge admin">dueño</span>' : ""}<span>${fechaHora(c.createdAt)}</span>
+            ${c.mine || isAdmin() ? `<button class="del" data-del="${c.id}" aria-label="Borrar comentario">${icon("trash")}</button>` : ""}</div>
+          <div class="text">${esc(c.text)}</div>
+        </div>`).join("") : `<div class="empty" style="padding:22px;">${entryId ? "Nadie ha comentado este movimiento." : "Sin comentarios todavía."}</div>`}
+      <form class="compose" id="cf${entryId || 0}">
+        <textarea id="ct${entryId || 0}" maxlength="500" rows="1" placeholder="${isAdmin() ? "Escribe una nota o responde…" : "Escribe un comentario…"}" required></textarea>
+        <button class="btn primary" type="submit" aria-label="Enviar">${icon("send")}</button>
+      </form>`;
+    const ta = $(`ct${entryId || 0}`);
+    ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(120, ta.scrollHeight) + "px"; });
+    ta.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) $(`cf${entryId || 0}`).requestSubmit(); });
+    $(`cf${entryId || 0}`).addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const text = ta.value.trim();
+      if (!text) return;
+      try {
+        const { comment } = await api("/api/comments", { method: "POST", body: { debtId, entryId: entryId || null, text } });
+        comments.push(comment);
+        paint();
+        bumpCommentCount(entryId, +1);
+      } catch (err) { toast(err.message, "err"); }
+    });
+    box.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
+      if (!(await ask({ title: "¿Borrar el comentario?", ok: "Borrar", danger: true }))) return;
+      try {
+        await api(`/api/comments?id=${b.dataset.del}`, { method: "DELETE" });
+        comments = comments.filter((c) => c.id !== Number(b.dataset.del));
+        paint();
+        bumpCommentCount(entryId, -1);
+      } catch (err) { toast(err.message, "err"); }
+    }));
+  };
+  paint();
+}
+// Mantiene al dia el contador de la lista sin volver a pedir todo.
+function bumpCommentCount(entryId, n) {
+  if (!entryId || !S.entries) return;
+  const e = S.entries.list.find((x) => x.id === entryId);
+  if (e) e.comments = Math.max(0, e.comments + n);
+}
+
+function renderComments(d) {
+  $("debtTab").innerHTML = `
+    <p class="muted" style="margin:0 0 10px;">${isAdmin() ? "Aquí quedan las notas sobre la deuda en general. Los comentarios de un préstamo o abono concreto se escriben abriendo ese movimiento." : "Puedes dejar comentarios sobre la deuda en general, o abrir un préstamo o abono para comentar ese en particular."}</p>
+    <div class="card" id="genComments"><div class="empty" style="padding:20px;">Cargando…</div></div>
+    <div id="allComments" style="margin-top:14px;"></div>`;
+  commentsThread($("genComments"), d.id, null);
+  // Y debajo, todo lo comentado sobre movimientos, para no tener que abrirlos uno a uno.
+  api(`/api/comments?debtId=${d.id}&entryId=0`).then(({ comments }) => {
+    const sobreMovs = comments.filter((c) => c.entryId);
+    const box = $("allComments");
+    if (!box || !sobreMovs.length) return;
+    box.innerHTML = `<h3 style="margin-top:8px;">Sobre movimientos</h3><div class="card">${sobreMovs.map((c) => `
+      <button class="cmt" data-ce="${c.entryId}" style="display:block; width:100%; text-align:left; border-left:0; border-right:0; border-top:0; color:inherit;">
+        <div class="head"><b>${esc(c.userName)}</b><span>${fechaHora(c.createdAt)}</span></div>
+        <div class="text">${esc(c.text)}</div>
+        <div class="ctx">${icon(c.entryKind === "loan" ? "up" : "down")}${c.entryKind === "loan" ? "Préstamo" : "Abono"} de ${money(c.entryAmount, c.entryCurrency || d.currency)} · ${prettyDay(c.entryDay, { year: true })}</div>
+      </button>`).join("")}</div>`;
+    box.querySelectorAll("[data-ce]").forEach((b) => b.addEventListener("click", () => entryDetail(Number(b.dataset.ce))));
+  }).catch(() => {});
+}
+
+/* ===========================================================================
+   Simulador: "¿y si abono X cada tanto?"
+
+   Se parte del saldo actual. En cada periodo se suma el interes de esos dias
+   (tasa anual / 365 por dia, simple dentro del periodo, capitalizado al pagar) y
+   se resta el abono. Termina cuando el saldo llega a cero. Si el abono no cubre
+   ni el interes del periodo, la deuda nunca baja y se avisa.
+   =========================================================================== */
+const FREQS = { weekly: { label: "Semanal", days: 7 }, biweekly: { label: "Quincenal", days: 14 }, monthly: { label: "Mensual", months: 1 } };
+function simulate({ balance, amount, freq, start, rate }) {
+  const f = FREQS[freq] || FREQS.monthly;
+  const rows = [];
+  let bal = balance, day = start, prev = start, interest = 0, paid = 0, n = 0;
+  while (bal > 0.005 && n < 1200) {
+    const dias = n === 0 ? 0 : daysBetween(prev, day);
+    const i = rate > 0 ? bal * (rate / 100) * (dias / 365) : 0;
+    bal += i; interest += i;
+    const pago = Math.min(amount, bal);
+    bal -= pago; paid += pago; n++;
+    rows.push({ n, day, payment: pago, interest: i, balance: Math.max(0, bal) });
+    // Si con el pago el saldo no bajo respecto al periodo anterior, no termina nunca.
+    if (n >= 2 && rows[n - 1].balance >= rows[n - 2].balance - 0.005 && bal > 0) return { rows, never: true, interest, paid, n, end: null };
+    prev = day;
+    day = f.months ? shiftMonths(day, f.months) : shiftDays(day, f.days);
+  }
+  return { rows, never: bal > 0.005, interest, paid, n, end: rows.length ? rows[rows.length - 1].day : start };
+}
+
+function renderSim() {
+  // Una opcion por deuda Y moneda con saldo: cada parte se paga por su lado.
+  const opts = (S.sum?.debts || []).filter((d) => d.active)
+    .flatMap((d) => d.currencies.filter((c) => d.totals[c].balance > 0).map((c) => ({ debt: d, cur: c, balance: d.totals[c].balance, key: `${d.id}-${c}` })));
+  const body = $("simBody");
+  if (!opts.length) { body.innerHTML = `<div class="card">${emptyState("calc", "No hay deudas con saldo para simular.")}</div>`; return; }
+  const sc = S.simScen && opts.some((o) => o.key === S.simScen.key) ? S.simScen : null;
+  const o0 = sc ? opts.find((o) => o.key === sc.key) : (opts.find((o) => o.debt.id === S.debtId) || opts[0]);
+  const sugerido = (o) => Math.max(1, Math.round(o.balance / 12 / (o.cur === "USD" ? 1 : 10)) * (o.cur === "USD" ? 1 : 10));
+  const st = sc || {
+    key: o0.key, freq: "monthly", start: todayApp(), rate: o0.debt.interestRate || 0,
+    amounts: [sugerido(o0)],
+  };
+  S.simScen = st;
+  const o = opts.find((x) => x.key === st.key), d = o.debt, cur = o.cur;
+
+  body.innerHTML = `
+    <div class="chips" style="margin-bottom:12px;">${opts.map((x) => `<button class="chip ${x.key === st.key ? "on" : ""}" data-sd="${x.key}">${esc(x.debt.name)} · ${money(x.balance, x.cur)}</button>`).join("")}</div>
+    <div class="card pad">
+      <div class="two">
+        <label class="field"><span>Cada cuánto pago</span>
+          <select id="simFreq">${Object.entries(FREQS).map(([k, v]) => `<option value="${k}" ${st.freq === k ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
+        <label class="field"><span>Primer pago</span><input type="date" id="simStart" value="${st.start}"></label>
+      </div>
+      <label class="field"><span>Interés anual (%)</span><input type="number" id="simRate" inputmode="decimal" min="0" max="200" step="0.1" value="${st.rate}">
+        <small class="hint">${d.interestRate ? `La deuda tiene ${d.interestRate}% registrado.` : "Déjalo en 0 si no cobra interés (lo normal entre familia)."}</small></label>
+      <div class="field"><span>Cuánto abono cada vez (${CUR[cur].sym}) — hasta 3 escenarios para comparar</span>
+        <div id="simAmounts">${st.amounts.map((a, i) => `
+          <div class="scen"><i style="background:${SERIES[i]}"></i><input type="number" inputmode="decimal" min="1" step="1" value="${a}" data-i="${i}" class="simAmt" style="padding:10px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); background:var(--card); min-height:44px;">
+            ${st.amounts.length > 1 ? `<button type="button" class="x" data-rm="${i}" aria-label="Quitar">${icon("cross")}</button>` : ""}</div>`).join("")}</div>
+        ${st.amounts.length < 3 ? `<button type="button" class="btn sm" id="simAdd">${icon("plus")}Comparar otro monto</button>` : ""}
+      </div>
+    </div>
+    <div id="simOut"></div>`;
+
+  body.querySelectorAll("[data-sd]").forEach((b) => b.addEventListener("click", () => {
+    const no = opts.find((x) => x.key === b.dataset.sd);
+    S.simScen = { ...st, key: no.key, rate: no.debt.interestRate || 0, amounts: [sugerido(no)] };
+    renderSim();
+  }));
+  const read = () => {
+    st.freq = $("simFreq").value; st.start = $("simStart").value || todayApp();
+    st.rate = Math.max(0, Number($("simRate").value) || 0);
+    st.amounts = [...body.querySelectorAll(".simAmt")].map((i) => Math.max(0, Number(i.value) || 0));
+  };
+  ["simFreq", "simStart", "simRate"].forEach((id) => $(id).addEventListener("input", () => { read(); simOut(o, st); }));
+  body.querySelectorAll(".simAmt").forEach((i) => i.addEventListener("input", () => { read(); simOut(o, st); }));
+  body.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => { read(); st.amounts.splice(Number(b.dataset.rm), 1); renderSim(); }));
+  $("simAdd")?.addEventListener("click", () => { read(); const last = st.amounts[st.amounts.length - 1] || 100; st.amounts.push(Math.round(last * 1.5)); renderSim(); });
+  simOut(o, st);
+}
+
+// `o` es { debt, cur, balance }: la parte de una deuda en una moneda.
+function simOut(o, st) {
+  const cur = o.cur, balance = o.balance;
+  const out = $("simOut");
+  const scen = st.amounts.map((a, i) => ({ amount: a, color: SERIES[i], r: a > 0 ? simulate({ balance, amount: a, freq: st.freq, start: st.start, rate: st.rate }) : null }));
+  const f = FREQS[st.freq];
+  // Eje X comun: la simulacion mas larga manda. Se muestrea para no dibujar 300 puntos.
+  const maxN = Math.max(0, ...scen.map((s) => (s.r && !s.r.never ? s.r.rows.length : Math.min(s.r?.rows.length || 0, 60))));
+  const step = Math.max(1, Math.ceil(maxN / 40));
+  const idx = []; for (let i = 0; i <= maxN; i += step) idx.push(i); if (idx[idx.length - 1] !== maxN) idx.push(maxN);
+  const dayAt = (i) => (i === 0 ? st.start : f.months ? shiftMonths(st.start, f.months * (i - 1)) : shiftDays(st.start, f.days * (i - 1)));
+  const labels = idx.map((i) => (i === 0 ? "hoy" : monthLabel(monthKey(dayAt(i)))));
+  const series = scen.map((s) => ({
+    name: `${money(s.amount, cur)} ${f.label.toLowerCase()}`, color: s.color,
+    values: idx.map((i) => (i === 0 ? balance : s.r && i <= s.r.rows.length ? s.r.rows[i - 1].balance : s.r && !s.r.never ? 0 : null)),
+  }));
+
+  out.innerHTML = `
+    ${scen.map((s, i) => !s.r ? "" : `
+      <div class="card pad" style="margin-top:12px; border-left:3px solid ${s.color};">
+        <div class="row"><b class="grow">Abonando ${money(s.amount, cur)} ${f.label.toLowerCase()}</b>${st.amounts.length > 1 ? `<span class="badge">escenario ${i + 1}</span>` : ""}</div>
+        ${s.r.never ? `<div class="msg warn" style="margin-bottom:0;">Con ese monto la deuda no baja: el abono no cubre ni el interés del período. Sube el monto.</div>` : `
+        <div class="sim-result" style="margin-bottom:0;">
+          <div class="tile"><div class="lbl">Termina</div><div class="val">${prettyDay(s.r.end, { year: true })}</div></div>
+          <div class="tile"><div class="lbl">Pagos</div><div class="val">${s.r.n} · ${tiempoHumano(st.start, s.r.end)}</div></div>
+          <div class="tile"><div class="lbl">Total pagado</div><div class="val">${money(s.r.paid, cur)}</div></div>
+          <div class="tile"><div class="lbl">Intereses</div><div class="val ${s.r.interest > 0 ? "bad" : ""}">${money(s.r.interest, cur)}</div></div>
+        </div>`}
+      </div>`).join("")}
+    ${series.some((s) => s.values.some((v) => v != null)) ? `
+    <div class="card pad" style="margin-top:12px;">
+      <p class="chart-title">Cómo bajaría el saldo</p>
+      <p class="chart-sub">Saldo después de cada pago · ${CUR[cur].label}</p>
+      <div id="simChart"></div>
+      ${chartTable(labels, series, (v) => money(v, cur))}
+    </div>` : ""}
+    ${scen[0]?.r && !scen[0].r.never ? `
+    <details class="plain card" style="margin-top:12px;">
+      <summary>${icon("chevron")}Calendario de pagos${st.amounts.length > 1 ? ` (escenario 1)` : ""}</summary>
+      <div class="scroll-x"><table class="tbl">
+        <thead><tr><th>#</th><th>Fecha</th><th>Pago</th>${st.rate > 0 ? "<th>Interés</th>" : ""}<th>Saldo</th></tr></thead>
+        <tbody>${scen[0].r.rows.slice(0, 200).map((r) => `<tr><td>${r.n}</td><td style="text-align:right; color:var(--muted); font-weight:400;">${prettyDay(r.day, { year: true })}</td><td>${money(r.payment, cur)}</td>${st.rate > 0 ? `<td>${money2(r.interest, cur)}</td>` : ""}<td>${money(r.balance, cur)}</td></tr>`).join("")}</tbody>
+      </table></div>
+      ${scen[0].r.rows.length > 200 ? `<p class="muted" style="padding:0 16px 12px;">Se muestran los primeros 200 pagos.</p>` : ""}
+    </details>` : ""}`;
+  if ($("simChart")) lineChart($("simChart"), { series, labels, fmtFull: (v) => money(v, cur) });
+}
+function tiempoHumano(a, b) {
+  const dias = daysBetween(a, b);
+  if (dias < 45) return plural(Math.max(1, Math.round(dias / 7)), "semana", "semanas");
+  const meses = Math.round(dias / 30.44);
+  if (meses < 24) return plural(meses, "mes", "meses");
+  const anos = Math.floor(meses / 12), resto = meses % 12;
+  return `${plural(anos, "año", "años")}${resto ? ` y ${plural(resto, "mes", "meses")}` : ""}`;
+}
+
+/* ===========================================================================
+   Vista: ajustes
+   =========================================================================== */
+function renderSettings() {
+  const admin = isAdmin();
+  const theme = currentTheme();
+  const item = (act, ic, label, extra = "", chev = true) => `
+    <button class="list-item" data-act="${act}">${icon(ic)}<span class="grow">${label}</span>${extra}${chev ? icon("chevron", "chev") : ""}</button>`;
+  $("settingsBody").innerHTML = `
+    <div class="card">
+      <div class="me-row">
+        <div class="avatar">${esc(initials(S.me?.fullName || S.me?.name))}</div>
+        <div class="grow">
+          <div class="row" style="gap:7px;"><b class="ellip">${esc(S.me?.name || "")}</b><span class="badge ${admin ? "admin" : ""}">${admin ? "Dueño" : "Solo lectura"}</span></div>
+          <div class="muted ellip">${esc(S.me?.fullName || S.account?.name || "")}</div>
+        </div>
+      </div>
+      ${admin ? item("acc", "edit", "Nombre de la cuenta", `<span class="muted ellip" style="max-width:40vw;">${esc(S.account?.name || "")}</span>`) : ""}
+    </div>
+
+    <h3>Apariencia</h3>
+    <div class="seg" id="themeSeg">
+      ${THEMES.map(([k, label, ic]) => `<button data-theme="${k}" class="${theme === k ? "on" : ""}" aria-pressed="${theme === k}">${icon(ic)}${label}</button>`).join("")}
+    </div>
+
+    <h3>Deudas</h3>
+    <div class="card">
+      ${item("debts", "wallet", admin ? "Administrar deudas" : "Ver mis deudas", `<span class="muted">${(S.sum?.debts || []).length}</span>`)}
+      ${admin ? item("users", "people", "Usuarios con acceso") : ""}
+    </div>
+
+    ${yaInstalada() ? "" : `<h3>Aplicación</h3><div class="card">${item("instalar", "install", "Instalar en el teléfono", promptInstalar ? '<span class="badge admin">listo</span>' : "")}</div>`}
+
+    <h3>Cuenta</h3>
+    <div class="card">
+      ${item("pw", "key", "Cambiar mi contraseña")}
+      ${item("rec", "shield", "Código de recuperación", S.recovery && !S.recovery.has ? '<span class="badge off">sin código</span>' : "")}
+      <button class="list-item" data-act="out">${icon("logout")}<span class="grow" style="color:var(--bad);">Cerrar sesión</span></button>
+    </div>`;
+  $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("[data-theme]"); if (!b) return; applyTheme(b.dataset.theme); renderSettings(); });
+  $("settingsBody").querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => ({
+    acc: accountNameScreen, debts: debtsScreen, users: usersScreen, instalar: instalarApp,
+    pw: passwordScreen, rec: recoveryScreen,
+    out: async () => { if (await ask({ title: "¿Cerrar sesión?", ok: "Cerrar sesión", danger: true })) logout(); },
+  }[b.dataset.act]())));
+}
+
+function accountNameScreen() {
+  openModal(`
+    <h2>Nombre de la cuenta</h2>
+    <form id="aForm" class="card pad">
+      <label class="field"><span>Nombre</span><input id="aName" required maxlength="80" value="${esc(S.account?.name || "")}"></label>
+      <div id="aMsg"></div>
+      <button class="btn primary wide" type="submit">Guardar</button>
+    </form>`);
+  $("aForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/auth?account=1", { method: "PUT", body: { name: $("aName").value } });
+      S.account = r.account; localStorage.setItem("dd_account", JSON.stringify(S.account));
+      closeModal(); toast("Guardado"); paintHeader(); renderSettings();
+    } catch (err) { showErr("aMsg", err); }
+  });
+}
+
+/* -------------------------------- deudas --------------------------------- */
+async function debtsScreen() {
+  let debts;
+  try { ({ debts } = await api("/api/debts?all=1")); } catch (err) { return toast(err.message, "err"); }
+  const admin = isAdmin();
+  openModal(`
+    <h2>${admin ? "Administrar deudas" : "Mis deudas"}</h2>
+    <div class="card">
+      ${debts.length ? debts.map((d) => `
+        <button class="list-item" data-d="${d.id}">
+          ${icon(KIND_META[d.kind]?.icon || "wallet")}
+          <div class="grow">
+            <div class="ellip"><b>${esc(d.name)}</b>${d.active ? "" : ' <span class="badge off">cerrada</span>'}</div>
+            <div class="muted ellip">${esc(d.counterpart || KIND_META[d.kind]?.label)}${admin ? ` · ${plural(d.viewers, "persona", "personas")} con acceso` : ""}</div>
+          </div>
+          <b class="num" style="text-align:right;">${balances(d, "<br>")}</b>
+          ${icon("chevron", "chev")}
+        </button>`).join("") : emptyState("wallet", "Sin deudas.")}
+    </div>
+    ${admin ? `<button class="btn primary wide" id="newDebt" style="margin-top:12px;">${icon("plus")}Nueva deuda</button>` : ""}`);
+  $("modalRoot").querySelectorAll("[data-d]").forEach((b) => b.addEventListener("click", () => {
+    const d = debts.find((x) => x.id === Number(b.dataset.d));
+    if (admin) debtForm(d); else { closeModal(); openDebt(d.id); }
+  }));
+  $("newDebt")?.addEventListener("click", () => debtForm(null));
+}
+
+function debtForm(d) {
+  const isNew = !d;
+  openModal(`
+    <h2>${isNew ? "Nueva deuda" : esc(d.name)}</h2>
+    <p class="muted" style="margin:-6px 0 14px;">${isNew ? "Una deuda es un espacio aparte: con una persona, una tarjeta o lo que sea. Después le registras préstamos y abonos." : "Los movimientos no se tocan desde aquí."}</p>
+    <form id="dForm" class="card pad">
+      <label class="field"><span>Nombre *</span><input id="dName" required maxlength="80" value="${esc(d?.name || "")}" placeholder="Hermano, Tarjeta Amex…"></label>
+      <div class="two">
+        <label class="field"><span>Tipo</span>
+          <select id="dKind">${Object.entries(KIND_META).map(([k, v]) => `<option value="${k}" ${(d?.kind || "person") === k ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
+        <label class="field"><span>Moneda habitual</span>
+          <select id="dCur">${Object.entries(CUR).map(([k, v]) => `<option value="${k}" ${(d?.currency || "NIO") === k ? "selected" : ""}>${v.sym} ${v.label}</option>`).join("")}</select>
+          <small class="hint">Cada movimiento puede ir en otra moneda; esta es la que se propone.</small></label>
+      </div>
+      <label class="field"><span>A quién le debo</span><input id="dWho" maxlength="80" value="${esc(d?.counterpart || "")}" placeholder="Juan, Banco LAFISE…"></label>
+      <label class="field"><span>Interés anual (%)</span><input id="dRate" type="number" inputmode="decimal" min="0" max="200" step="0.01" value="${d?.interestRate ?? ""}" placeholder="0">
+        <small class="hint">Solo para el simulador; el saldo registrado no cambia solo. Entre familia normalmente va vacío.</small></label>
+      <label class="field"><span>Nota</span><textarea id="dNote" maxlength="300" placeholder="Acuerdos, fecha límite, lo que haga falta recordar">${esc(d?.note || "")}</textarea></label>
+      ${isNew ? "" : `<label class="row" style="margin-bottom:12px; gap:8px;"><input type="checkbox" id="dActive" ${d.active ? "checked" : ""} style="width:20px; height:20px;"><span>Deuda abierta</span><small class="muted" style="margin-left:auto;">cerrada = saldada o archivada</small></label>`}
+      <div id="dMsg"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Crear" : "Guardar"}</button>
+    </form>
+    ${isNew ? "" : `<button class="btn danger wide" id="dDel" style="margin-top:10px;">${icon("trash")}Borrar definitivamente</button>`}`);
+  $("dForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = { name: $("dName").value, kind: $("dKind").value, currency: $("dCur").value, counterpart: $("dWho").value, interestRate: $("dRate").value, note: $("dNote").value };
+    if (!isNew) body.active = $("dActive").checked;
+    try {
+      const r = isNew ? await api("/api/debts", { method: "POST", body }) : await api(`/api/debts?id=${d.id}`, { method: "PUT", body });
+      closeModal(); toast(isNew ? "Deuda creada" : "Guardado");
+      S.entries = null;
+      await refresh();
+      if (isNew) openDebt(r.debt.id); else setView(S.view);
+    } catch (err) { showErr("dMsg", err); }
+  });
+  $("dDel")?.addEventListener("click", async () => {
+    if (!(await ask({ title: `¿Borrar "${d.name}"?`, text: `Se borran sus ${plural(d.entries, "movimiento", "movimientos")}, comprobantes y comentarios. No se puede deshacer. Si solo quieres dejar de verla, ciérrala en vez de borrarla.`, ok: "Borrar todo", danger: true }))) return;
+    try {
+      await api(`/api/debts?id=${d.id}&hard=1`, { method: "DELETE" });
+      closeModal(); toast("Deuda borrada");
+      S.entries = null; await refresh(); setView("home");
+    } catch (err) { toast(err.message, "err"); }
+  });
+}
+
+/* ------------------------------- usuarios -------------------------------- */
+async function usersScreen() {
+  let users;
+  try { ({ users } = await api("/api/auth")); } catch (err) { return toast(err.message, "err"); }
+  openModal(`
+    <h2>Usuarios con acceso</h2>
+    <p class="muted" style="margin:-6px 0 12px;">Quien entra a ver tus deudas. Un usuario de <b>solo lectura</b> ve únicamente las deudas que le asignes y puede comentar, nada más.</p>
+    <div class="card">
+      ${users.map((u) => `
+        <button class="list-item" data-u="${u.id}">
+          <div class="grow">
+            <div class="ellip"><b>${esc(u.name)}</b>${u.active ? "" : ' <span class="badge off">inactivo</span>'}</div>
+            <div class="muted ellip">${esc(u.fullName || "—")}${u.role === "admin" ? " · todas las deudas" : " · " + plural((u.debtIds || []).length, "deuda", "deudas")}</div>
+          </div>
+          <span class="badge ${u.role === "admin" ? "admin" : ""}">${u.role === "admin" ? "Dueño" : "Lectura"}</span>
+          ${u.id === S.me.id ? "" : icon("chevron", "chev")}
+        </button>`).join("")}
+    </div>
+    <button class="btn primary wide" id="addUser" style="margin-top:12px;">${icon("userPlus")}Dar acceso a alguien</button>`);
+  $("modalRoot").querySelectorAll("[data-u]").forEach((b) => b.addEventListener("click", () => {
+    const u = users.find((x) => x.id === Number(b.dataset.u));
+    if (u.id !== S.me.id) userForm(u);
+  }));
+  $("addUser").addEventListener("click", () => userForm(null));
+}
+
+function userForm(u) {
+  const isNew = !u;
+  const debts = S.sum?.debts || [];
+  openModal(`
+    <h2>${isNew ? "Nuevo usuario" : esc(u.name)}</h2>
+    <form id="uForm" class="card pad">
+      ${isNew ? `<label class="field"><span>Usuario * (sin espacios)</span><input id="uName" required maxlength="20" autocapitalize="none" spellcheck="false" placeholder="hermano"></label>` : ""}
+      <label class="field"><span>Nombre</span><input id="uFull" value="${esc(u?.fullName || "")}" maxlength="80"></label>
+      <label class="field"><span>Permisos</span>
+        <select id="uRole">
+          <option value="viewer" ${u?.role !== "admin" ? "selected" : ""}>Solo lectura — ve las deudas que le asigne y comenta</option>
+          <option value="admin" ${u?.role === "admin" ? "selected" : ""}>Dueño — ve y edita todo, igual que yo</option>
+        </select></label>
+      <div class="field" id="uDebtsBox">
+        <span>Deudas que puede ver</span>
+        <div class="card">
+          ${debts.length ? debts.map((d) => `
+            <label class="list-item" style="cursor:pointer;">
+              <input type="checkbox" class="uDebt" value="${d.id}" style="width:20px; height:20px;" ${(u?.debtIds || []).includes(d.id) || (isNew && d.id === S.debtId) ? "checked" : ""}>
+              <span class="grow ellip">${esc(d.name)}${d.active ? "" : ' <span class="badge off">cerrada</span>'}</span>
+              <span class="muted" style="text-align:right;">${balances(d, "<br>")}</span>
+            </label>`).join("") : emptyState("wallet", "Primero crea una deuda.")}
+        </div>
+        <small class="hint">Sin ninguna marcada no verá nada.</small>
+      </div>
+      <label class="field"><span>${isNew ? "Contraseña * (mínimo 6)" : "Nueva contraseña (vacío = no cambiar)"}</span><input id="uPw" type="password" ${isNew ? "required" : ""} minlength="6" maxlength="64" autocomplete="new-password"></label>
+      ${isNew ? "" : `<label class="row" style="margin-bottom:12px; gap:8px;"><input type="checkbox" id="uActive" ${u.active ? "checked" : ""} style="width:20px; height:20px;"><span>Usuario activo</span></label>`}
+      <div id="uMsg"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Crear" : "Guardar"}</button>
+    </form>`);
+  const syncBox = () => $("uDebtsBox").classList.toggle("hidden", $("uRole").value === "admin");
+  $("uRole").addEventListener("change", syncBox); syncBox();
+  $("uForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const debtIds = [...$("uDebtsBox").querySelectorAll(".uDebt:checked")].map((c) => Number(c.value));
+    try {
+      if (isNew) {
+        await api("/api/auth?new=1", { method: "POST", body: { name: $("uName").value.trim(), password: $("uPw").value, fullName: $("uFull").value, role: $("uRole").value, debtIds } });
+      } else {
+        const body = { fullName: $("uFull").value, role: $("uRole").value, active: $("uActive").checked, debtIds };
+        if ($("uPw").value) body.password = $("uPw").value;
+        await api(`/api/auth?id=${u.id}`, { method: "PUT", body });
+      }
+      closeModal(); toast("Guardado"); refresh().catch(() => {}); usersScreen();
+    } catch (err) { showErr("uMsg", err); }
+  });
+}
+
+/* --------------------------- contraseña y codigo ------------------------- */
+function passwordScreen() {
+  openModal(`
+    <h2>Cambiar mi contraseña</h2>
+    <form id="pForm" class="card pad">
+      <label class="field"><span>Contraseña actual</span><input id="pCur" type="password" required autocomplete="current-password"></label>
+      <label class="field"><span>Nueva contraseña (mínimo 6)</span><input id="pNew" type="password" required minlength="6" maxlength="64" autocomplete="new-password"></label>
+      <div id="pMsg"></div>
+      <button class="btn primary wide" type="submit">Cambiar</button>
+    </form>`);
+  $("pForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/auth", { method: "PUT", body: { currentPassword: $("pCur").value, password: $("pNew").value } });
+      if (r.token) { S.token = r.token; localStorage.setItem("dd_token", r.token); }
+      closeModal(); toast("Contraseña cambiada");
+    } catch (err) { showErr("pMsg", err); }
+  });
+}
+
+function recoveryScreen() {
+  openModal(`
+    <h2>Código de recuperación</h2>
+    <p class="muted" style="margin:-6px 0 14px;">Es tu llave de repuesto si olvidas la contraseña. Se enseña <b>una sola vez</b>: guárdalo en un lugar seguro. Generar uno nuevo invalida el anterior.</p>
+    ${S.recovery?.has ? `<div class="msg ok">Ya tienes un código${S.recovery.at ? ` (generado el ${fechaHora(S.recovery.at)})` : ""}. Si lo perdiste, genera otro.</div>` : `<div class="msg warn">Todavía no tienes código. Sin él, si olvidas la contraseña no hay forma de entrar.</div>`}
+    <form id="cForm" class="card pad">
+      <label class="field"><span>Tu contraseña actual</span><input id="cPw" type="password" required autocomplete="current-password"></label>
+      <div id="cMsg"></div>
+      <button class="btn primary wide" type="submit">${S.recovery?.has ? "Generar uno nuevo" : "Generar código"}</button>
+    </form>`);
+  $("cForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/auth?recovery=1", { method: "PUT", body: { currentPassword: $("cPw").value } });
+      S.recovery = { has: true, at: new Date().toISOString() };
+      codigoScreen(r.recovery);
+    } catch (err) { showErr("cMsg", err); }
+  });
+}
+
+function codigoScreen(code, { luego = null } = {}) {
+  openModal(`
+    <h2>Guarda este código</h2>
+    <p class="muted" style="margin:-6px 0 14px;">Es la única forma de volver a entrar si olvidas tu contraseña. <b>No se puede volver a ver.</b> Cópialo o tómale una captura.</p>
+    <div class="code-box">${esc(code)}</div>
+    <button class="btn wide" id="copyCode" style="margin-top:12px;">Copiar</button>
+    <button class="btn primary wide" id="okCode" style="margin-top:8px;">Ya lo guardé</button>`);
+  $("copyCode").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(code); toast("Copiado"); } catch { toast("No se pudo copiar. Anótalo a mano.", "err"); }
+  });
+  $("okCode").addEventListener("click", () => { closeModal(); if (luego) luego(); });
+}
+
+/* ===========================================================================
+   PDF: estado de cuenta.
+
+   Generador minimo escrito a mano (mismo MiniPdf que en asistencia-obra): un
+   PDF es texto plano con una tabla de posiciones al final, asi que para tablas
+   y titulos no hace falta libreria. Los comprobantes JPEG entran tal cual
+   (filtro DCTDecode).
+   =========================================================================== */
+const HELV_W = (() => {
+  const w = {};
+  const put = (chars, val) => [...chars].forEach((c) => { w[c] = val; });
+  put(" ", 278); put("!", 278); put('"', 355); put("#$", 556); put("%", 889); put("&", 667);
+  put("'", 191); put("()", 333); put("*", 389); put("+", 584); put(",", 278); put("-", 333);
+  put(".", 278); put("/", 278); put("0123456789", 556); put(":;", 278); put("<=>", 584);
+  put("?", 556); put("@", 1015);
+  put("ADEHKNOQRSTUVXYZBCFGIJLMPW", 667);
+  put("C", 722); put("D", 722); put("G", 778); put("I", 278); put("J", 500); put("L", 556);
+  put("M", 833); put("N", 722); put("O", 778); put("Q", 778); put("R", 722); put("T", 611);
+  put("U", 722); put("W", 944); put("Z", 611); put("F", 611);
+  put("abcdeghknopqsuvxyz", 556);
+  put("c", 500); put("f", 278); put("i", 222); put("j", 222); put("k", 500); put("l", 222);
+  put("m", 833); put("r", 333); put("s", 500); put("t", 278); put("v", 500); put("w", 722);
+  put("x", 500); put("y", 500); put("z", 500);
+  put("[]\\", 278); put("^", 469); put("_", 556); put("`", 333); put("{}", 334); put("|", 260); put("~", 584);
+  return w;
+})();
+const textWidth = (str, size) => [...String(str)].reduce((t, c) => t + (HELV_W[c] ?? 556), 0) * size / 1000;
+function fitText(str, size, max) {
+  let t = String(str);
+  if (textWidth(t, size) <= max) return t;
+  while (t.length > 1 && textWidth(t + "...", size) > max) t = t.slice(0, -1);
+  return t + "...";
+}
+const FONT_OK = (t) => String(t ?? "")
+  .replace(/•/g, "\x95").replace(/…/g, "...").replace(/[‘’]/g, "'")
+  .replace(/[“”]/g, '"').replace(/[–—−]/g, "-").replace(/[^\x20-\xFF]/g, "?");
+
+class MiniPdf {
+  constructor() { this.W = 595; this.H = 842; this.images = []; this.pages = []; this.newPage(); }
+  addImage(img) { if (!img || !img.bin || !img.w || !img.h) return -1; this.images.push(img); return this.images.length - 1; }
+  newPage() { this.buf = []; this.pages.push(this.buf); return this; }
+  text(x, y, str, { size = 10, bold = false, align = "left", gray = 0 } = {}) {
+    const t = FONT_OK(str ?? "");
+    if (align === "right") x -= textWidth(t, size);
+    else if (align === "center") x -= textWidth(t, size) / 2;
+    const e = t.replace(/[\\()]/g, (c) => "\\" + c);
+    this.buf.push(`BT ${gray} g /${bold ? "F2" : "F1"} ${size} Tf 1 0 0 1 ${x.toFixed(2)} ${(this.H - y).toFixed(2)} Tm (${e}) Tj ET`);
+    return this;
+  }
+  line(x1, y1, x2, y2, { width = 0.6, gray = 0.8 } = {}) {
+    this.buf.push(`${gray} G ${width} w ${x1.toFixed(2)} ${(this.H - y1).toFixed(2)} m ${x2.toFixed(2)} ${(this.H - y2).toFixed(2)} l S`);
+    return this;
+  }
+  rect(x, y, w, h, gray = 0.95) {
+    this.buf.push(`${gray} g ${x.toFixed(2)} ${(this.H - y - h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f`);
+    return this;
+  }
+  drawImage(idx, x, y, w, h) {
+    const img = this.images[idx];
+    if (!img) return this;
+    const escala = Math.min(w / img.w, h / img.h);
+    const iw = img.w * escala, ih = img.h * escala;
+    this.buf.push(`q ${iw.toFixed(2)} 0 0 ${ih.toFixed(2)} ${x.toFixed(2)} ${(this.H - y - ih).toFixed(2)} cm /Im${idx} Do Q`);
+    return this;
+  }
+  blob() {
+    const objs = [];
+    const add = (body) => { objs.push(body); return objs.length; };
+    const catalogN = add(""), pagesN = add("");
+    const f1 = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+    const f2 = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>");
+    const imgNs = this.images.map((im) => add(
+      `<< /Type /XObject /Subtype /Image /Width ${im.w} /Height ${im.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${im.bin.length} >>\nstream\n${im.bin}\nendstream`));
+    const recursoImgs = imgNs.length ? ` /XObject << ${imgNs.map((n, i) => `/Im${i} ${n} 0 R`).join(" ")} >>` : "";
+    const pageIds = [];
+    for (const buf of this.pages) {
+      const stream = buf.join("\n");
+      const contN = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+      pageIds.push(add(`<< /Type /Page /Parent ${pagesN} 0 R /MediaBox [0 0 ${this.W} ${this.H}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >>${recursoImgs} >> /Contents ${contN} 0 R >>`));
+    }
+    objs[catalogN - 1] = `<< /Type /Catalog /Pages ${pagesN} 0 R >>`;
+    objs[pagesN - 1] = `<< /Type /Pages /Kids [${pageIds.map((n) => n + " 0 R").join(" ")}] /Count ${pageIds.length} >>`;
+    let out = "%PDF-1.4\n";
+    const offsets = [];
+    objs.forEach((body, i) => { offsets.push(out.length); out += `${i + 1} 0 obj\n${body}\nendobj\n`; });
+    const xref = out.length;
+    out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+    for (const off of offsets) out += String(off).padStart(10, "0") + " 00000 n \n";
+    out += `trailer\n<< /Size ${objs.length + 1} /Root ${catalogN} 0 R >>\nstartxref\n${xref}\n%%EOF`;
+    const bytes = new Uint8Array(out.length);
+    for (let i = 0; i < out.length; i++) bytes[i] = out.charCodeAt(i) & 0xff;
+    return new Blob([bytes], { type: "application/pdf" });
+  }
+}
+function dataUriToBinary(uri) { try { return atob(String(uri).split(",")[1] || ""); } catch { return ""; } }
+function jpegSize(bin) {
+  for (let i = 2; i + 9 < bin.length; ) {
+    if (bin.charCodeAt(i) !== 0xFF) { i++; continue; }
+    const m = bin.charCodeAt(i + 1);
+    if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+      return { h: (bin.charCodeAt(i + 5) << 8) | bin.charCodeAt(i + 6), w: (bin.charCodeAt(i + 7) << 8) | bin.charCodeAt(i + 8) };
+    }
+    const len = (bin.charCodeAt(i + 2) << 8) | bin.charCodeAt(i + 3);
+    if (len <= 0) break;
+    i += 2 + len;
+  }
+  return null;
+}
+
+const PM = 45;    // margen del PDF
+function statementPdf(d, list, receipts) {
+  const doc = new MiniPdf();
+  const hoy = todayApp();
+  let pag = 1;
+  const footer = () => {
+    doc.text(PM, 842 - 32, `Generado el ${prettyDay(hoy, { year: true })} · ${S.account?.name || "Deudas"}`, { size: 7.5, gray: 0.55 });
+    doc.text(595 - PM, 842 - 32, `Página ${pag}`, { size: 7.5, gray: 0.55, align: "right" });
+  };
+  // Cabecera.
+  doc.text(PM, PM + 6, S.account?.name || "Deudas", { size: 9, gray: 0.45 });
+  doc.text(PM, PM + 30, `Estado de cuenta: ${d.name}`, { size: 18, bold: true });
+  doc.text(PM, PM + 47, [d.counterpart ? `A: ${d.counterpart}` : null, KIND_META[d.kind]?.label, d.interestRate ? `${d.interestRate}% anual` : null].filter(Boolean).join("  ·  "), { size: 9.5, gray: 0.4 });
+  doc.line(PM, PM + 58, 595 - PM, PM + 58);
+  let y = PM + 84;
+  const cols = { fecha: PM, det: PM + 62, pres: 595 - PM - 200, abo: 595 - PM - 100, saldo: 595 - PM };
+  const salto = (min) => { if (y > 842 - min) { footer(); doc.newPage(); pag++; y = PM + 10; return true; } return false; };
+  const head = () => {
+    doc.text(cols.fecha, y, "FECHA", { size: 7.5, gray: 0.5, bold: true });
+    doc.text(cols.det, y, "DETALLE", { size: 7.5, gray: 0.5, bold: true });
+    doc.text(cols.pres, y, "PRÉSTAMO", { size: 7.5, gray: 0.5, bold: true, align: "right" });
+    doc.text(cols.abo, y, "ABONO", { size: 7.5, gray: 0.5, bold: true, align: "right" });
+    doc.text(cols.saldo, y, "SALDO", { size: 7.5, gray: 0.5, bold: true, align: "right" });
+    y += 6; doc.line(PM, y, 595 - PM, y, { gray: 0.7 }); y += 15;
+  };
+
+  // Una seccion por moneda: los saldos nunca se mezclan.
+  for (const cur of d.currencies) {
+    const t = d.totals[cur];
+    const asc = cronologico(list.filter((e) => e.currency === cur));
+    salto(220);
+    if (d.currencies.length > 1) { doc.text(PM, y, `En ${CUR[cur].label}`, { size: 12, bold: true }); y += 20; }
+    const tiles = [["Prestado", money(t.loaned, cur)], ["Abonado", money(t.paid, cur)], ["Saldo actual", money(Math.max(0, t.balance), cur)]];
+    const tw = (595 - 2 * PM - 20) / 3;
+    tiles.forEach(([l, v], i) => {
+      const x = PM + i * (tw + 10);
+      doc.rect(x, y, tw, 46, 0.96);
+      doc.text(x + 10, y + 16, l.toUpperCase(), { size: 7.5, gray: 0.5, bold: true });
+      doc.text(x + 10, y + 36, v, { size: 14, bold: i === 2 });
+    });
+    y += 70;
+    head();
+    let bal = 0;
+    for (const e of asc) {
+      if (salto(70)) head();
+      bal += e.kind === "loan" ? e.amount : -e.amount;
+      doc.text(cols.fecha, y, prettyDay(e.day, { year: true }), { size: 9, gray: 0.35 });
+      doc.text(cols.det, y, fitText((e.reason || (e.kind === "loan" ? "Préstamo" : "Abono")) + (e.hasReceipt ? " *" : ""), 9, cols.pres - cols.det - 70), { size: 9 });
+      if (e.kind === "loan") doc.text(cols.pres, y, money(e.amount, cur), { size: 9, align: "right" });
+      else doc.text(cols.abo, y, money(e.amount, cur), { size: 9, align: "right" });
+      doc.text(cols.saldo, y, money(bal, cur), { size: 9, align: "right", bold: true });
+      y += 5; doc.line(PM, y, 595 - PM, y, { gray: 0.9, width: 0.4 }); y += 13;
+    }
+    if (!asc.length) { doc.text(PM, y, "Sin movimientos.", { size: 9, gray: 0.5 }); y += 18; }
+    y += 6;
+    doc.text(cols.saldo, y, `Saldo: ${money(Math.max(0, t.balance), cur)}`, { size: 11, bold: true, align: "right" });
+    y += 30;
+  }
+  if (list.some((e) => e.hasReceipt)) doc.text(PM, y - 30, receipts ? "* con comprobante adjunto al final" : "* con comprobante (disponible en la app)", { size: 8, gray: 0.5 });
+  footer();
+  // Comprobantes, uno por pagina.
+  for (const r of receipts || []) {
+    const bin = dataUriToBinary(r.image), size = bin && jpegSize(bin);
+    if (!size) continue;
+    doc.newPage(); pag++;
+    doc.text(PM, PM + 6, `Comprobante · ${r.entry.kind === "loan" ? "Préstamo" : "Abono"} de ${money(r.entry.amount, r.entry.currency)} · ${prettyDay(r.entry.day, { year: true })}`, { size: 10, bold: true });
+    if (r.entry.reason) doc.text(PM, PM + 22, r.entry.reason, { size: 9, gray: 0.4 });
+    doc.drawImage(doc.addImage({ bin, ...size }), PM, PM + 36, 595 - 2 * PM, 842 - PM - 80 - PM);
+    footer();
+  }
+  return doc.blob();
+}
+
+function statementScreen() {
+  const d = currentDebt(), list = S.entries?.list || [];
+  const conRecibos = list.filter((e) => e.hasReceipt).length;
+  openModal(`
+    <h2>Estado de cuenta</h2>
+    <p class="muted" style="margin:-6px 0 14px;">Un PDF con el resumen y todos los movimientos de <b>${esc(d.name)}</b>, con el saldo después de cada uno.</p>
+    ${conRecibos ? `<label class="row card pad" style="gap:10px; cursor:pointer; margin-bottom:12px;"><input type="checkbox" id="stRec" style="width:20px; height:20px;"><span class="grow">Adjuntar los ${plural(conRecibos, "comprobante", "comprobantes")} al final</span></label>` : ""}
+    <div class="row" style="gap:8px;">
+      <button class="btn primary grow" id="stDown">${icon("download")}Descargar</button>
+      <button class="btn grow" id="stShare">${icon("whatsapp")}Compartir</button>
+    </div>
+    <div id="stMsg"></div>`);
+  const build = async () => {
+    let receipts = null;
+    if ($("stRec")?.checked) {
+      $("stMsg").innerHTML = `<div class="msg">Cargando comprobantes…</div>`;
+      receipts = [];
+      for (const e of list.filter((x) => x.hasReceipt)) {
+        try { const { image } = await api(`/api/entries?id=${e.id}&receipt=1`); receipts.push({ entry: e, image }); } catch {}
+      }
+      $("stMsg").innerHTML = "";
+    }
+    const name = `Estado de cuenta - ${d.name.replace(/[^\p{L}\p{N} _-]/gu, "")} - ${todayApp()}.pdf`;
+    return { blob: statementPdf(d, list, receipts), name };
+  };
+  $("stDown").addEventListener("click", async () => { try { const { blob, name } = await build(); download(blob, name); closeModal(); toast("PDF generado"); } catch (err) { showErr("stMsg", err); } });
+  $("stShare").addEventListener("click", async () => { try { const { blob, name } = await build(); await sharePdf(blob, name); } catch (err) { showErr("stMsg", err); } });
+}
+
+function download(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+async function sharePdf(blob, name) {
+  const file = new File([blob], name, { type: "application/pdf" });
+  if (!navigator.canShare?.({ files: [file] })) { download(blob, name); toast("Tu equipo no puede adjuntar directo. Se descargó el PDF para que lo adjuntes."); return; }
+  try { await navigator.share({ files: [file], title: name }); } catch (err) { if (err?.name !== "AbortError") toast("No se pudo compartir el archivo.", "err"); }
+}
+// wa.me abre WhatsApp con el texto ya escrito y deja elegir el contacto.
+function shareTexto(texto) { window.open("https://wa.me/?text=" + encodeURIComponent(texto), "_blank", "noopener"); }
+function resumenTexto(d, list) {
+  const ult = [...list].slice(0, 5).map((e) => `${e.kind === "loan" ? "＋" : "－"} ${prettyDay(e.day)} · ${e.reason || (e.kind === "loan" ? "Préstamo" : "Abono")} · ${money(e.amount, e.currency)}`);
+  const varias = d.currencies.length > 1;
+  return [
+    `*${d.name}*${d.counterpart ? ` (${d.counterpart})` : ""}`,
+    `Al ${prettyDay(todayApp(), { year: true })}`,
+    ...d.currencies.flatMap((c) => {
+      const t = d.totals[c];
+      return [``, varias ? `_En ${CUR[c].label}_` : null, `Prestado: ${money(t.loaned, c)}`, `Abonado: ${money(t.paid, c)}`, `*Saldo: ${money(Math.max(0, t.balance), c)}*`];
+    }),
+    ult.length ? `` : null, ult.length ? `Últimos movimientos:` : null, ...ult,
+  ].filter((x) => x !== null).join("\n");
+}
+
+/* ===========================================================================
+   Inicio
+   =========================================================================== */
+applyTheme(currentTheme());
+document.querySelectorAll("nav.bottom button").forEach((b) => b.insertAdjacentHTML("afterbegin", icon(b.dataset.icon)));
+$("loginMark").innerHTML = icon("coins");
+$("brandMark").innerHTML = icon("coins");
+$("meBtn").textContent = "…";
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+(async () => {
+  if (!S.token || !S.me) return;
+  try {
+    await start();
+    const { me, account, recovery } = await api("/api/auth");
+    S.me = me; S.account = account || null; S.recovery = recovery || null;
+    localStorage.setItem("dd_me", JSON.stringify(me));
+    localStorage.setItem("dd_account", JSON.stringify(S.account));
+    paintHeader();
+    if (S.view === "settings") renderSettings();
+  } catch (err) {
+    if (/Sesión/.test(err.message)) logout();
+    else toast(err.message, "err");
+  }
+})();
+</script>
+</body>
+</html>

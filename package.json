@@ -1,0 +1,15 @@
+{
+  "name": "deudas",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Control de deudas personales: prestamos, abonos, comprobantes y simulador de pago (Vercel + Turso/libSQL)",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "test": "node scripts/smoke.mjs",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.17.4"
+  }
+}
