@@ -378,6 +378,13 @@ check("el proximo pago de un acuerdo mensual esta atrasado", (() => {
   const due = ui.nextDue(cobro);
   return due && due.vencido && due.dias < 0 && due.amount === 1000;
 })(), JSON.stringify(ui.nextDue(cobro)));
+// Quien acordo pagar cada mes y NUNCA pago tiene que ver el primer pago que
+// dejo de hacer, no el que viene: lo contrario esconde el atraso.
+check("si nunca pago, toca el primero del acuerdo (atrasado)", (() => {
+  const sinPagos = { ...cobro, dueFrom: dia(75), lastPaymentDay: null };
+  const due = ui.nextDue(sinPagos);
+  return due && due.day === dia(75) && due.dias === -75;
+})(), JSON.stringify(ui.nextDue({ ...cobro, lastPaymentDay: null })));
 check("sin acuerdo no hay recordatorio", ui.nextDue(deuda) === null);
 check("un cobro saldado tampoco recuerda nada",
   ui.nextDue({ ...cobro, totals: { NIO: { loaned: 6000, paid: 6000, balance: 0 } } }) === null);

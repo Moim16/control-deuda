@@ -730,11 +730,20 @@ function nextDue(d) {
   const bal = d.currencies.reduce((a, c) => a + Math.max(0, d.totals[c].balance), 0);
   if (bal <= 0) return null;                       // saldado: no hay nada que recordar
   const hoy = todayApp();
-  const desde = d.lastPaymentDay && d.lastPaymentDay > d.dueFrom ? d.lastPaymentDay : null;
+
+  // Lo que toca es el PRIMER pago que no se ha hecho: si nunca pago, el primero
+  // del acuerdo (y si ya paso, esta atrasado); si ya pago, el primero posterior
+  // a ese pago.
+  //
+  // Avanzar hasta hoy seria lo facil, pero a quien acordo pagar cada mes desde
+  // julio y no ha pagado nada le diria "toca en 12 dias" en vez de "atrasado 50
+  // dias", que es justo lo que hay que saber.
+  const ultimoPago = d.lastPaymentDay && d.lastPaymentDay >= d.dueFrom ? d.lastPaymentDay : null;
   let day = d.dueFrom, i = 0;
-  // Se avanza hasta pasar el ultimo pago (o hasta hoy si nunca pago).
-  while (i++ < 600 && day <= (desde || shiftDays(hoy, -1))) {
-    day = d.dueEvery === "monthly" ? shiftMonths(d.dueFrom, i) : shiftDays(d.dueFrom, (d.dueEvery === "weekly" ? 7 : 14) * i);
+  if (ultimoPago) {
+    while (i++ < 600 && day <= ultimoPago) {
+      day = d.dueEvery === "monthly" ? shiftMonths(d.dueFrom, i) : shiftDays(d.dueFrom, (d.dueEvery === "weekly" ? 7 : 14) * i);
+    }
   }
   const dias = daysBetween(hoy, day);
   return { day, dias, vencido: dias < 0, amount: d.dueAmount, currency: d.currency };
