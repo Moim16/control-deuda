@@ -92,7 +92,8 @@ check("index.html trae los dos <script> de siempre", scripts.length === 2, `hay 
 const EXPORTS = ["S", "renderHome", "renderDebt", "renderSpend", "renderSettings", "renderMoves",
   "nextDue", "dueText", "SIDE", "T", "wordSide", "sideOf", "lastMonths", "monthKey", "shiftMonthKey",
   "catColor", "gastosHtml", "balances", "money", "simulate", "balanceByMonth", "withRunning", "niceTicks", "pickLabels",
-  "incomeOf", "capacityOf", "debtFlowOf"];
+  "incomeOf", "capacityOf", "debtFlowOf",
+  "renderVeh", "taskStatus", "taskText", "taskUrgency", "VEH_META"];
 const codigo = `${scripts[1]}\n;globalThis.__ui = { ${EXPORTS.join(", ")} };`;
 
 vm.createContext(ctx);
@@ -286,6 +287,72 @@ check("los abonos del mes salen de los movimientos ya cargados", (() => {
   const f = ui.debtFlowOf(ui.monthKey(dia(1)), "NIO");
   return f.pagado === 10000 && f.recibido === 0;
 })(), JSON.stringify(ui.debtFlowOf(ui.monthKey(dia(1)), "NIO")));
+
+/* ========================================================================== */
+section("Mantenimiento del vehiculo");
+
+// Una moto a 12.500 km. El aceite se le hizo a los 10.000 hace 200 dias
+// (cada 3.000 km o 6 meses -> ya toca por las dos). Las llantas a los 12.000
+// hace 10 dias (cada 15.000 km -> falta mucho). La bujia nunca.
+const moto = { id: 1, name: "Mi moto", kind: "moto", plate: "M 123", year: 2019, note: null, active: 1, odometer: 12500, services: 2, lastDay: dia(10), spentNIO: 1700, spentUSD: 0 };
+const vTasks = [
+  { id: 1, vehicleId: 1, name: "Cambio de aceite", everyKm: 3000, everyMonths: 6, note: null, active: 1 },
+  { id: 2, vehicleId: 1, name: "Llantas", everyKm: 15000, everyMonths: null, note: null, active: 1 },
+  { id: 3, vehicleId: 1, name: "Bujía", everyKm: 10000, everyMonths: null, note: null, active: 1 },
+  { id: 4, vehicleId: 1, name: "Seguro", everyKm: null, everyMonths: 12, note: null, active: 1 },
+];
+const vServices = [
+  { id: 11, vehicleId: 1, taskId: 1, expenseId: null, day: dia(200), odometer: 10000, title: "Cambio de aceite", cost: 1200, currency: "NIO", place: "Taller Luis", note: null, hasReceipt: true, createdBy: "moises", createdAt: new Date().toISOString() },
+  { id: 12, vehicleId: 1, taskId: 2, expenseId: 21, day: dia(10), odometer: 12000, title: "Llanta trasera", cost: 500, currency: "NIO", place: null, note: null, hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
+  { id: 13, vehicleId: 1, taskId: 4, expenseId: null, day: dia(60), odometer: 11500, title: "Seguro anual", cost: null, currency: "NIO", place: null, note: null, hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
+];
+ui.S.veh = { today: dia(0), vehicles: [moto], tasks: vTasks, services: vServices };
+ui.S.vehId = 1;
+out = pintar(() => ui.renderVeh(), "vehBody");
+check("muestra el kilometraje del vehiculo", out.includes("12,500"), out.slice(0, 300));
+check("y avisa lo que YA TOCA", out.includes("Ya toca"), out.slice(0, 600));
+check("el aceite esta entre lo que toca", out.includes("Cambio de aceite"));
+check("la bujia (nunca hecha) tambien", out.includes("Bujía"));
+check("ofrece anotar un servicio", out.includes("vhAdd"));
+// El taller no va en la lista (ahi manda la fecha y el km); se ve al abrir el
+// servicio.
+check("y lista el historial con fecha y kilometraje",
+  out.includes("Llanta trasera") && out.includes("12,000 km") && out.includes("Seguro anual"), out.slice(-500));
+check("marca los servicios que ya estan en gastos", out.includes("en gastos"));
+
+check("por km: pasado el intervalo, ya toca", (() => {
+  const st = ui.taskStatus(vTasks[0], moto);   // aceite: 10.000 + 3.000 = 13.000 vs 12.500
+  // Faltan 500 km, pero por FECHA ya se paso (200 dias > 6 meses).
+  return st.due && st.by === "date" && st.kmLeft === 500;
+})(), JSON.stringify(ui.taskStatus(vTasks[0], moto)));
+check("manda lo que llegue primero, km o fecha", (() => {
+  const t = { ...vTasks[0], everyMonths: null };     // solo por km
+  const st = ui.taskStatus(t, moto);
+  return !st.due && st.kmLeft === 500;
+})(), JSON.stringify(ui.taskStatus({ ...vTasks[0], everyMonths: null }, moto)));
+check("una tarea nunca hecha toca desde ya", (() => {
+  const st = ui.taskStatus(vTasks[2], moto);
+  return st.due && st.by === "never" && st.last === null;
+})());
+check("y lo dice con palabras", ui.taskText(vTasks[2], ui.taskStatus(vTasks[2], moto)) === "Nunca se le ha hecho");
+check("las llantas, recien hechas, no tocan", (() => {
+  const st = ui.taskStatus(vTasks[1], moto);   // 12.000 + 15.000 = 27.000 vs 12.500
+  return !st.due && st.kmLeft === 14500;
+})(), JSON.stringify(ui.taskStatus(vTasks[1], moto)));
+check("lo mas urgente se ordena primero", (() => {
+  const u1 = ui.taskUrgency(vTasks[2], ui.taskStatus(vTasks[2], moto));   // nunca
+  const u2 = ui.taskUrgency(vTasks[1], ui.taskStatus(vTasks[1], moto));   // llantas
+  return u1 < u2;
+})());
+check("sin kilometraje anotado no inventa km que faltan", (() => {
+  const sinKm = { ...moto, odometer: null };
+  const st = ui.taskStatus(vTasks[0], sinKm);
+  return st.kmLeft === null && st.daysLeft !== null;
+})(), JSON.stringify(ui.taskStatus(vTasks[0], { ...moto, odometer: null })));
+
+ui.S.veh = { today: dia(0), vehicles: [], tasks: [], services: [] };
+out = pintar(() => ui.renderVeh(), "vehBody");
+check("sin vehiculos, ofrece agregar uno", out.includes("vhNew"), out.slice(0, 200));
 
 /* ========================================================================== */
 section("Las cuentas");

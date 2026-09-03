@@ -18,6 +18,7 @@ import summary from "../api/summary.js";
 import categories from "../api/categories.js";
 import expenses from "../api/expenses.js";
 import incomes from "../api/incomes.js";
+import vehicles from "../api/vehicles.js";
 import { db, ensureSchema } from "../lib/db.js";
 
 let fails = 0, total = 0;
@@ -474,6 +475,114 @@ check("borrar un ingreso", (await call(incomes, { method: "DELETE", query: { id:
 check("uno de otra cuenta -> 404", (await call(incomes, { method: "DELETE", query: { id: String(I1) }, token: B.token })).status === 404);
 
 /* ========================================================================== */
+section("Vehiculos y mantenimiento");
+
+r = await call(vehicles, { token: A.token });
+check("una cuenta nueva no tiene vehiculos", r.status === 200 && r.body.vehicles.length === 0, j(r.body));
+r = await call(vehicles, { method: "POST", token: A.token, body: { name: "Mi moto", kind: "moto", plate: "M 123", year: 2019 } });
+check("crear la moto trae sus tareas tipicas", r.status === 201 && r.body.vehicle.name === "Mi moto" && r.body.tasks.length >= 5, j(r.body.tasks?.map((t) => t.name)));
+const VH = r.body.vehicle.id;
+const TK = {}; for (const t of r.body.tasks) TK[t.name] = t.id;
+check("el aceite viene con sus dos intervalos",
+  r.body.tasks.find((t) => t.name === "Cambio de aceite").everyKm === 3000 && r.body.tasks.find((t) => t.name === "Cambio de aceite").everyMonths === 6);
+check("un carro trae otras tareas",
+  (await call(vehicles, { method: "POST", token: A.token, body: { name: "El carro", kind: "car" } })).body.tasks.some((t) => t.name === "Revisión vehicular"));
+check("sin nombre -> 400", (await call(vehicles, { method: "POST", token: A.token, body: { name: " " } })).status === 400);
+check("año absurdo -> 400", (await call(vehicles, { method: "POST", token: A.token, body: { name: "X", year: 90000 } })).status === 400);
+check("el viewer no ve los vehiculos (403)", (await call(vehicles, { token: V.token })).status === 403);
+check("ni puede crearlos (403)", (await call(vehicles, { method: "POST", token: V.token, body: { name: "X" } })).status === 403);
+check("otra cuenta no puede editar mi moto (404)",
+  (await call(vehicles, { method: "PUT", query: { id: String(VH) }, token: B.token, body: { name: "hack" } })).status === 404);
+
+// --- tareas
+r = await call(vehicles, { method: "POST", query: { task: "1" }, token: A.token, body: { vehicleId: VH, name: "Bujía", everyKm: 10000 } });
+check("agregar una tarea propia", r.status === 201 && r.body.task.everyKm === 10000 && r.body.task.everyMonths === null, j(r.body));
+const TKB = r.body.task.id;
+check("una tarea sin ningun intervalo -> 400",
+  (await call(vehicles, { method: "POST", query: { task: "1" }, token: A.token, body: { vehicleId: VH, name: "Nada" } })).status === 400);
+check("tarea en vehiculo ajeno -> 404",
+  (await call(vehicles, { method: "POST", query: { task: "1" }, token: B.token, body: { vehicleId: VH, name: "X", everyKm: 100 } })).status === 404);
+check("dejar una tarea sin intervalos al editar -> 400",
+  (await call(vehicles, { method: "PUT", query: { task: String(TKB) }, token: A.token, body: { everyKm: "" } })).status === 400);
+
+// --- servicios
+// Hace n dias, en YYYY-MM-DD (el kilometraje y las fechas del historial
+// tienen que ser del pasado para que "cuando toca" signifique algo).
+const haceDias = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+const sDia0 = haceDias(200), sDia1 = haceDias(30);
+r = await call(vehicles, { method: "POST", query: { service: "1" }, token: A.token,
+  body: { vehicleId: VH, taskId: TK["Cambio de aceite"], day: sDia0, odometer: 10000, title: "Cambio de aceite", cost: "1,200.50", place: "Taller Luis", receipt: JPEG } });
+check("anotar un servicio con factura", r.status === 201 && r.body.service.cost === 1200.5 && r.body.service.hasReceipt === true && r.body.service.odometer === 10000, j(r.body));
+const SV1 = r.body.service.id;
+r = await call(vehicles, { method: "POST", query: { service: "1" }, token: A.token,
+  body: { vehicleId: VH, day: sDia1, odometer: 12500, title: "Llanta trasera", cost: "" } });
+check("un servicio puede no haber costado nada", r.status === 201 && r.body.service.cost === null, j(r.body));
+const SV2 = r.body.service.id;
+
+check("sin titulo -> 400", (await call(vehicles, { method: "POST", query: { service: "1" }, token: A.token, body: { vehicleId: VH, day: sDia1, title: "" } })).status === 400);
+check("kilometraje con decimales -> 400",
+  (await call(vehicles, { method: "POST", query: { service: "1" }, token: A.token, body: { vehicleId: VH, day: sDia1, title: "X", odometer: 12.5 } })).status === 400);
+check("tarea de otro vehiculo -> 400",
+  (await call(vehicles, { method: "POST", query: { service: "1" }, token: A.token, body: { vehicleId: VH, day: sDia1, title: "X", taskId: 999999 } })).status === 400);
+check("el viewer no anota servicios (403)",
+  (await call(vehicles, { method: "POST", query: { service: "1" }, token: V.token, body: { vehicleId: VH, day: sDia1, title: "X" } })).status === 403);
+
+r = await call(vehicles, { token: A.token });
+let vh = r.body.vehicles.find((x) => x.id === VH);
+check("el kilometraje del vehiculo es el mas alto anotado", vh.odometer === 12500, j(vh));
+check("y los totales gastados van por moneda", vh.spentNIO === 1200.5 && vh.spentUSD === 0 && vh.services === 2, j(vh));
+r = await call(vehicles, { query: { id: String(SV1), receipt: "1" }, token: A.token });
+check("la factura se pide aparte", r.status === 200 && r.body.image === JPEG);
+check("un servicio sin factura -> 404", (await call(vehicles, { query: { id: String(SV2), receipt: "1" }, token: A.token })).status === 404);
+check("factura de otra cuenta -> 404", (await call(vehicles, { query: { id: String(SV1), receipt: "1" }, token: B.token })).status === 404);
+
+// --- el servicio que se anota tambien como gasto del hogar
+r = await call(vehicles, { method: "POST", query: { service: "1" }, token: A.token,
+  body: { vehicleId: VH, day: sDia1, odometer: 12600, title: "Gasolina y lavado", cost: 800, categoryId: CAT.Transporte } });
+check("un servicio se puede anotar tambien como gasto", r.status === 201 && !!r.body.service.expenseId, j(r.body));
+const SV3 = r.body.service.id;
+r = await call(expenses, { token: A.token });
+let gastoDelServicio = r.body.expenses.find((e) => e.reason === "Gasolina y lavado");
+check("y aparece en los gastos, una sola vez", !!gastoDelServicio && gastoDelServicio.amount === 800 && gastoDelServicio.categoryId === CAT.Transporte, j(gastoDelServicio));
+
+r = await call(vehicles, { method: "PUT", query: { service: String(SV3) }, token: A.token, body: { cost: 950 } });
+check("cambiar el costo del servicio", r.status === 200 && r.body.service.cost === 950);
+r = await call(expenses, { token: A.token });
+check("mueve tambien el gasto del hogar", r.body.expenses.find((e) => e.reason === "Gasolina y lavado").amount === 950, j(r.body.expenses.map((e) => [e.reason, e.amount])));
+r = await call(vehicles, { method: "PUT", query: { service: String(SV3) }, token: A.token, body: { cost: "" } });
+check("si el servicio pasa a no costar, el gasto desaparece", r.body.service.expenseId === null, j(r.body.service));
+r = await call(expenses, { token: A.token });
+check("y ya no esta en los gastos", !r.body.expenses.some((e) => e.reason === "Gasolina y lavado"));
+
+r = await call(vehicles, { method: "POST", query: { service: "1" }, token: A.token,
+  body: { vehicleId: VH, day: sDia1, title: "Aceite y filtro", cost: 500, categoryId: CAT.Transporte } });
+const SV4 = r.body.service.id;
+check("borrar el servicio se lleva su gasto", (await call(vehicles, { method: "DELETE", query: { service: String(SV4) }, token: A.token })).status === 200);
+r = await call(expenses, { token: A.token });
+check("...y el gasto ya no cuenta en el mes", !r.body.expenses.some((e) => e.reason === "Aceite y filtro"), j(r.body.expenses.map((e) => e.reason)));
+
+// --- borrar tarea y vehiculo
+r = await call(vehicles, { method: "DELETE", query: { task: String(TK["Cambio de aceite"]), hard: "1" }, token: A.token });
+check("borrar una tarea la elimina", r.status === 200 && r.body.deleted === true);
+r = await call(vehicles, { token: A.token });
+check("y su servicio queda en el historial, sin tarea",
+  r.body.services.find((s) => s.id === SV1)?.taskId === null, j(r.body.services.find((s) => s.id === SV1)));
+check("archivar una tarea no la borra", (await call(vehicles, { method: "DELETE", query: { task: String(TKB) }, token: A.token })).status === 200);
+r = await call(vehicles, { token: A.token });
+check("queda archivada, no desaparecida", r.body.tasks.find((t) => t.id === TKB)?.active === 0);
+
+r = await call(vehicles, { method: "DELETE", query: { id: String(VH) }, token: A.token });
+check("archivar el vehiculo", r.status === 200);
+r = await call(vehicles, { token: A.token });
+check("archivado no sale por defecto", !r.body.vehicles.some((x) => x.id === VH));
+check("con all=1 si", (await call(vehicles, { query: { all: "1" }, token: A.token })).body.vehicles.some((x) => x.id === VH));
+r = await call(vehicles, { method: "DELETE", query: { id: String(VH), hard: "1" }, token: A.token });
+check("borrado definitivo del vehiculo", r.status === 200 && r.body.deleted === true);
+const srvHuerfanos = Number((await db.execute({ sql: `SELECT COUNT(*) c FROM services WHERE vehicleId = ?`, args: [VH] })).rows[0].c);
+const tskHuerfanas = Number((await db.execute({ sql: `SELECT COUNT(*) c FROM vehicle_tasks WHERE vehicleId = ?`, args: [VH] })).rows[0].c);
+check("no deja servicios ni tareas huerfanas", srvHuerfanos === 0 && tskHuerfanas === 0, `${srvHuerfanos} / ${tskHuerfanas}`);
+
+/* ========================================================================== */
 section("Cerrar y borrar deudas");
 
 r = await call(debts, { method: "DELETE", query: { id: String(D3) }, token: A.token });
@@ -509,6 +618,7 @@ if (process.argv.includes("--keep")) {
     "DELETE FROM receipts", "DELETE FROM comments", "DELETE FROM entries",
     "DELETE FROM debt_users", "DELETE FROM debts",
     "DELETE FROM expense_receipts", "DELETE FROM expenses", "DELETE FROM categories", "DELETE FROM incomes",
+    "DELETE FROM service_receipts", "DELETE FROM services", "DELETE FROM vehicle_tasks", "DELETE FROM vehicles",
     "DELETE FROM users", "DELETE FROM accounts",
   ], "write");
   console.log("Datos de prueba borrados.");

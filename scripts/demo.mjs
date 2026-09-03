@@ -15,6 +15,7 @@ import comments from "../api/comments.js";
 import categories from "../api/categories.js";
 import expenses from "../api/expenses.js";
 import incomes from "../api/incomes.js";
+import vehicles from "../api/vehicles.js";
 import { db, ensureSchema } from "../lib/db.js";
 
 function call(h, { method = "GET", query = {}, body, token } = {}) {
@@ -141,6 +142,33 @@ for (const [categoryId, day, amount, reason, currency] of gastos) {
 await call(incomes, { method: "POST", token: A, body: { kind: "monthly", amount: 22000, currency: "NIO", day: "2025-01-01", source: "Salario" } });
 await call(incomes, { method: "POST", token: A, body: { kind: "monthly", amount: 26000, currency: "NIO", day: mesAtras(3, 1), source: "Salario (aumento)" } });
 await call(incomes, { method: "POST", token: A, body: { kind: "once", amount: 4000, currency: "NIO", day: dia(0, 2), source: "Trabajo extra" } });
+
+/* -------------------------------- vehiculo -------------------------------- */
+// Una moto con historial: el aceite se le hizo hace rato (ya toca), las llantas
+// hace poco (falta mucho), y la bujia nunca. Asi la pantalla tiene algo que
+// decir en las tres situaciones.
+r = await call(vehicles, { method: "POST", token: A, body: { name: "Mi moto", kind: "moto", plate: "M 123456", year: 2019, note: "Roja, 150cc" } });
+const VEH = r.body.vehicle.id;
+const TAREA = {};
+for (const t of r.body.tasks) TAREA[t.name] = t.id;
+
+for (const [tarea, mes, km, titulo, costo, lugar] of [
+  ["Cambio de aceite", 8, 8000, "Cambio de aceite y filtro", 1200, "Taller de don Luis"],
+  ["Frenos (pastillas)", 6, 9500, "Pastillas delanteras", 900, "Taller de don Luis"],
+  ["Cambio de aceite", 4, 11000, "Cambio de aceite", 1250, "Taller de don Luis"],
+  ["Llantas", 2, 12800, "Llanta trasera nueva", 3400, "Llantera El Rayo"],
+  ["Seguro", 1, 13200, "Seguro anual", 4800, null],
+  [null, 0, 13800, "Lavado y engrase", 250, null],
+]) {
+  r = await call(vehicles, { method: "POST", query: { service: "1" }, token: A, body: {
+    vehicleId: VEH, taskId: tarea ? TAREA[tarea] : null, day: dia(mes, 12), odometer: km,
+    title: titulo, cost: costo, currency: "NIO", place: lugar,
+    // Los dos ultimos se anotan tambien como gasto del hogar, para que se vea
+    // que la plata figura una sola vez.
+    categoryId: mes <= 1 ? CAT.Transporte : null,
+  } });
+  if (r.status !== 201) console.error("servicio fallo", r.body);
+}
 
 console.log("\nDemo lista:");
 console.log("  moises  / deuda1234   (dueño)");

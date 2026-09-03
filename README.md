@@ -1,6 +1,6 @@
 # Deudas
 
-PWA personal para llevar **lo que debo, lo que me deben y en qué se me va la plata**: préstamos con su motivo y comprobante, abonos, saldo por cuenta y en total, gráficos, un simulador de "¿y si abono X cada tanto?", recordatorios de cuándo toca pagar (o cobrar) y acceso de **solo lectura** para la otra persona (mi hermano entra, ve su deuda y puede comentar, pero no toca nada).
+PWA personal para llevar **lo que debo, lo que me deben, en qué se me va la plata y qué le toca al vehículo**: préstamos con su motivo y comprobante, abonos, saldo por cuenta y en total, gráficos, un simulador de "¿y si abono X cada tanto?", recordatorios de cuándo toca pagar (o cobrar) y acceso de **solo lectura** para la otra persona (mi hermano entra, ve su deuda y puede comentar, pero no toca nada).
 
 Mismo stack que `asistencia-obra`: un solo `index.html` sin frameworks, funciones serverless de Vercel y Turso/libSQL.
 
@@ -107,6 +107,20 @@ Dos decisiones que importan:
 - **Borrar una categoría no borra sus gastos**: quedan como *"Sin categoría"* y siguen contando en los totales. La plata se gastó igual; quitarla del total sería mentir. Si solo quieres dejar de usarla, se archiva.
 - **El presupuesto es un tope que uno se propone, no una regla.** Pasarse no bloquea nada ni impide anotar: solo se pinta en rojo.
 
+### Mantenimiento del vehículo
+
+La pestaña **Vehículo** (solo del dueño) responde una sola pregunta: **¿qué le toca ya?**
+
+- **Vehículos** — la moto, el carro. Al crear uno se le cargan las **tareas típicas** de su tipo con sus intervalos (aceite cada 3.000 km o 6 meses, llantas cada 15.000, seguro cada año…), listas para ajustar.
+- **Tareas** — lo que hay que repetir. Se define **por kilómetros, por meses, o los dos**; con los dos, toca **lo que llegue primero**, que es como funciona un manual de verdad.
+- **Servicios** — lo que se le hizo: fecha, kilometraje, qué fue, costo, taller y la **factura**. Un servicio puede no haber costado nada (garantía).
+
+El **kilometraje del vehículo** es el más alto que se haya anotado en un servicio; de ahí sale todo el cálculo. Una tarea que nunca se ha hecho **toca desde ya**. Arriba se muestran *"Ya toca"* y *"Pronto"* (a menos del 25% del intervalo), ordenadas por urgencia; el resto se pliega.
+
+> **Un servicio puede anotarse también como gasto del hogar.** Al registrarlo eliges la categoría (Transporte, por ejemplo) y la app crea el gasto, guardando su id en el servicio. Así la plata **figura una sola vez** en los totales del mes, editar el costo mueve las dos cosas, y borrar el servicio se lleva el gasto. Sin eso habría que anotarlo dos veces y las cuentas del mes dirían una cosa y el taller otra.
+
+Borrar una tarea **no borra sus servicios**: quedan en el historial sin tarea. Se hizo el trabajo y se pagó; perderlo sería perder el kilometraje.
+
 ### Comentarios
 
 Lo único que puede escribir un usuario de solo lectura. Van sobre la deuda en general (*Comentarios*) o sobre un préstamo o abono concreto (abriendo el movimiento): "este abono fue el del sábado", "¿y los 500 del mes pasado?". Cada quien borra los suyos; el dueño, cualquiera. Los últimos aparecen en el Resumen.
@@ -161,7 +175,7 @@ Sin build ni framework:
 - **Auth**: propia — scrypt (`salt:hash`) + `sessionToken` en el header `x-session-token`. Lockout de 5 intentos / 15 min
 - **Esquema**: se auto-crea con `ensureSchema()` (`CREATE TABLE IF NOT EXISTS` + `ALTER` idempotentes). No hay migraciones
 
-### Funciones serverless (8 de las 12 del plan Hobby)
+### Funciones serverless (9 de las 12 del plan Hobby)
 
 | Endpoint | Qué hace |
 |---|---|
@@ -173,6 +187,7 @@ Sin build ni framework:
 | `api/categories.js` | Categorías del gasto y su presupuesto mensual (solo dueño) |
 | `api/expenses.js` | Gastos del hogar y la captura de cada recibo (solo dueño) |
 | `api/incomes.js` | Ingresos: el sueldo con su historial y los extras (solo dueño) |
+| `api/vehicles.js` | Vehículos, sus tareas de mantenimiento y sus servicios (solo dueño) |
 
 ### Tablas
 
@@ -192,6 +207,10 @@ categories   gavetas del gasto del hogar + presupuesto mensual y su moneda
 expenses     un gasto por fila; categoryId NULL = sin categoría
 expense_receipts  la captura del recibo, misma idea que receipts
 incomes      ingresos: kind monthly (el sueldo, rige DESDE day) u once
+vehicles     la moto, el carro
+vehicle_tasks lo que hay que repetir: everyKm y/o everyMonths
+services     lo que se le hizo; expenseId ata el gasto del hogar que generó
+service_receipts  la factura del taller
 ```
 
 Decisiones que importan:
@@ -217,8 +236,8 @@ node --env-file=.env scripts/dev.mjs    # igual, pero contra Turso
 > **Cachea los handlers: si tocas `api/` o `lib/`, reinícialo.** Si no, la app sigue hablando con la versión anterior del backend y uno se pasa un rato buscando un fallo que no existe (pasó: la pantalla decía "anota tu ingreso" mientras el ingreso ya estaba guardado).
 
 ```bash
-node scripts/smoke.mjs        # 175 pruebas contra los handlers reales (base VACÍA); borra lo que crea
-node scripts/ui-check.mjs     # 46 comprobaciones de la interfaz, sin navegador
+node scripts/smoke.mjs        # 216 pruebas contra los handlers reales (base VACÍA); borra lo que crea
+node scripts/ui-check.mjs     # 61 comprobaciones de la interfaz, sin navegador
 node scripts/demo.mjs         # datos de muestra: moises / deuda1234 (dueño), hermano / deuda1234 (lectura)
 ```
 
@@ -226,7 +245,7 @@ node scripts/demo.mjs         # datos de muestra: moises / deuda1234 (dueño), h
 
 > Nació de un rato peleando con el navegador: media hora de clicks para descubrir un nombre de variable mal escrito es una mala inversión. Corre en dos segundos.
 
-Las pruebas cubren, entre otras cosas, que una cuenta no vea ni toque nada de otra, que un viewer vea solo lo asignado y no pueda escribir salvo comentarios, que los saldos por moneda no se mezclen, que el comprobante viaje aparte y solo en JPEG, que borrar un movimiento se lleve sus comentarios, que el código de recuperación sirva una sola vez, que un cobro lleve sus totales igual que una deuda, con el acuerdo de pago validado completo y la dirección cambiable sin tocar el historial, y que a un viewer no le lleguen los cobros ni el acuerdo de pago ni aunque se le asignen por error.
+Las pruebas cubren, entre otras cosas, que una cuenta no vea ni toque nada de otra, que un viewer vea solo lo asignado y no pueda escribir salvo comentarios, que los saldos por moneda no se mezclen, que el comprobante viaje aparte y solo en JPEG, que borrar un movimiento se lleve sus comentarios, que el código de recuperación sirva una sola vez, que un cobro lleve sus totales igual que una deuda, con el acuerdo de pago validado completo y la dirección cambiable sin tocar el historial, que a un viewer no le lleguen los cobros, los gastos, los ingresos ni los vehículos ni aunque se le asignen por error, y que el gasto que nace de un servicio del taller se mueva y se borre con él.
 
 ---
 

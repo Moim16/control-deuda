@@ -394,6 +394,11 @@ nav.bottom button {
 nav.bottom button.on { color:var(--ink); font-weight:600; }
 nav.bottom button.on::before { content:""; position:absolute; top:0; left:50%; transform:translateX(-50%); width:26px; height:2px; background:var(--ink); border-radius:0 0 2px 2px; }
 nav.bottom svg { width:21px; height:21px; }
+/* Con seis pestañas el texto ya no cabe en un telefono chico: se aprieta. */
+@media (max-width:420px) {
+  nav.bottom button { font-size:9.5px; padding:8px 1px; gap:3px; }
+  nav.bottom svg { width:19px; height:19px; }
+}
 
 /* -------------------------------------------------------------------- modal */
 .modal { position:fixed; inset:0; z-index:40; background:var(--veil); display:flex; align-items:flex-end; }
@@ -495,6 +500,12 @@ nav.bottom svg { width:21px; height:21px; }
       <div style="height:20px;"></div>
     </section>
 
+    <!-- ---------------- VEHICULOS ---------------- -->
+    <section id="viewVeh" class="hidden">
+      <div id="vehBody"><div class="empty">Cargando…</div></div>
+      <div style="height:20px;"></div>
+    </section>
+
     <!-- ---------------- SIMULAR ---------------- -->
     <section id="viewSim" class="hidden">
       <h2>Simular pagos</h2>
@@ -514,6 +525,7 @@ nav.bottom svg { width:21px; height:21px; }
     <button data-view="home" data-icon="home" class="on">Resumen</button>
     <button data-view="debt" data-icon="wallet">Deuda</button>
     <button data-view="spend" data-icon="cart" data-admin="1">Gastos</button>
+    <button data-view="veh" data-icon="moto" data-admin="1">Vehículo</button>
     <button data-view="sim" data-icon="calc">Simular</button>
     <button data-view="settings" data-icon="settings">Ajustes</button>
   </nav>
@@ -610,6 +622,8 @@ const S = {
   spend: null,          // /api/expenses: { categories, expenses, today }
   spendMonth: null,     // mes que se mira en Gastos (YYYY-MM)
   spendCur: null,       // moneda que se muestra en Gastos
+  veh: null,            // /api/vehicles: { vehicles, tasks, services }
+  vehId: null,          // vehiculo abierto
   recovery: null,
   simScen: null,        // escenarios del simulador (persisten al cambiar de vista)
 };
@@ -771,6 +785,8 @@ const ICONS = {
   flag:      '<path d="M5 21V4.5M5 4.5h12.5l-2 4 2 4H5"/>',
   archive:   '<rect x="3" y="4" width="18" height="4.5" rx="1.2"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5M10 13h4"/>',
   send:      '<path d="M21 3L10.5 13.5M21 3l-7 18-3.5-7.5L3 10z"/>',
+  moto:      '<circle cx="5.5" cy="17" r="3.2"/><circle cx="18.5" cy="17" r="3.2"/><path d="M5.5 17h5l4-7h3M8 10h5"/><path d="M14.5 10l2.5 7M15.5 6.5h3"/>',
+  wrench:    '<path d="M14.7 6.3a3.6 3.6 0 0 0 5 5l1.3 1.3-8 8a2.4 2.4 0 0 1-3.4 0l-1.9-1.9a2.4 2.4 0 0 1 0-3.4l8-8z"/><path d="M6.5 2.5l3 3-2 2-3-3z"/>',
   cart:      '<circle cx="9.5" cy="20" r="1.4"/><circle cx="17.5" cy="20" r="1.4"/><path d="M2.5 3.5h2.2l2.6 11.2h11.4l2.3-8.2H6.2"/>',
   tag:       '<path d="M11.3 2.8H20a1.2 1.2 0 0 1 1.2 1.2v8.7a1.2 1.2 0 0 1-.35.85l-8.2 8.2a1.2 1.2 0 0 1-1.7 0L2.8 13.05a1.2 1.2 0 0 1 0-1.7l8.5-8.2z"/><path d="M17 7h.01"/>',
   coins:     '<ellipse cx="9" cy="7" rx="6" ry="2.6"/><path d="M3 7v4c0 1.4 2.7 2.6 6 2.6s6-1.2 6-2.6V7"/><path d="M3 11v4c0 1.4 2.7 2.6 6 2.6 1 0 2-.1 2.9-.3"/><path d="M13 13.5c.9 1.2 3.2 2 5.5 1.7 2.2-.3 3.5-1.3 3.5-2.3v-1.4"/><ellipse cx="17" cy="11.5" rx="4.5" ry="2"/><path d="M12.5 11.5V16c0 1.1 2 2 4.5 2s4.5-.9 4.5-2v-4.5"/>',
@@ -956,6 +972,7 @@ function recoverScreen() {
 function logout() {
   S.token = ""; S.me = null; S.account = null; S.sum = null; S.entries = null;
   S.spend = null; S.spendMonth = null; S.spendCur = null;
+  S.veh = null; S.vehId = null;
   S.view = "home"; S.simScen = null;     // quien entre despues arranca en el resumen
   ["dd_token", "dd_me", "dd_account"].forEach((k) => localStorage.removeItem(k));
   closeModal();
@@ -1047,7 +1064,7 @@ function paintHeader() {
     $("headLbl").textContent = wordSide(d) === "owed" ? "Cobro" : "Deuda";
     $("headVal").textContent = d.name;
   } else {
-    $("headLbl").textContent = { home: "Resumen", spend: "Gastos del hogar", sim: "Simular pagos", settings: "Ajustes" }[S.view] || "Deudas";
+    $("headLbl").textContent = { home: "Resumen", spend: "Gastos del hogar", veh: "Mantenimiento", sim: "Simular pagos", settings: "Ajustes" }[S.view] || "Deudas";
     $("headVal").textContent = S.account?.name || "Deudas";
   }
 }
@@ -1058,7 +1075,7 @@ $("meBtn").addEventListener("click", () => setView("settings"));
 function setView(v) {
   S.view = v;
   document.querySelectorAll("nav.bottom button").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
-  for (const [name, el] of Object.entries({ home: $("viewHome"), debt: $("viewDebt"), spend: $("viewSpend"), sim: $("viewSim"), settings: $("viewSettings") })) {
+  for (const [name, el] of Object.entries({ home: $("viewHome"), debt: $("viewDebt"), spend: $("viewSpend"), veh: $("viewVeh"), sim: $("viewSim"), settings: $("viewSettings") })) {
     el.classList.toggle("hidden", name !== v);
   }
   window.scrollTo(0, 0);
@@ -1066,6 +1083,7 @@ function setView(v) {
   if (v === "home") renderHome();
   if (v === "debt") loadDebt();
   if (v === "spend") loadSpend();
+  if (v === "veh") ensureSpend().then(loadVeh);
   if (v === "sim") ensureSpend().then(renderSim);
   if (v === "settings") renderSettings();
 }
@@ -2574,6 +2592,489 @@ function categoryForm(c) {
 }
 
 /* ===========================================================================
+   Vista: mantenimiento del vehiculo
+
+   Lo unico que uno quiere saber al abrir esto es qué le toca ya. Asi que eso va
+   arriba, y el historial debajo.
+
+   Cuándo toca una tarea se calcula de las dos formas y manda la que llegue
+   primero, que es como funciona un manual de verdad: "aceite cada 3.000 km o
+   cada 6 meses". Si nunca se le ha hecho, toca desde ya.
+   =========================================================================== */
+const VEH_META = {
+  moto:  { label: "Moto", icon: "moto" },
+  car:   { label: "Carro", icon: "wallet" },
+  other: { label: "Otro", icon: "wrench" },
+};
+
+const vehById = (id) => (S.veh?.vehicles || []).find((v) => v.id === id) || null;
+const currentVeh = () => vehById(S.vehId) || (S.veh?.vehicles || []).find((v) => v.active) || null;
+const tasksOf = (vehId) => (S.veh?.tasks || []).filter((t) => t.vehicleId === vehId && t.active);
+const servicesOf = (vehId) => (S.veh?.services || []).filter((s) => s.vehicleId === vehId);
+
+/* Estado de una tarea: cuando toca por km, cuando por fecha, y cual manda.
+
+   Devuelve `{ last, kmLeft, daysLeft, due, overdue, by }`:
+     kmLeft   km que faltan (null si la tarea no va por km, o si no hay
+              kilometraje anotado con que comparar)
+     daysLeft dias que faltan
+     due      true si ya toca (por cualquiera de las dos)
+     by       'km' | 'date' | 'never': que fue lo que la hizo tocar */
+function taskStatus(task, veh) {
+  const hechos = servicesOf(veh.id).filter((s) => s.taskId === task.id);
+  const last = hechos.length ? cronologico(hechos)[hechos.length - 1] : null;
+  const hoy = S.veh?.today || todayApp();
+  if (!last) return { last: null, kmLeft: null, daysLeft: null, due: true, overdue: false, by: "never" };
+
+  let kmLeft = null;
+  if (task.everyKm && last.odometer != null && veh.odometer != null) {
+    kmLeft = last.odometer + task.everyKm - veh.odometer;
+  }
+  let daysLeft = null;
+  if (task.everyMonths) daysLeft = daysBetween(hoy, shiftMonths(last.day, task.everyMonths));
+
+  const porKm = kmLeft != null && kmLeft <= 0;
+  const porFecha = daysLeft != null && daysLeft <= 0;
+  return {
+    last, kmLeft, daysLeft,
+    due: porKm || porFecha,
+    overdue: porKm || porFecha,
+    by: porKm ? "km" : porFecha ? "date" : null,
+  };
+}
+
+// Como se dice en una linea. Lo mas urgente primero.
+function taskText(t, st) {
+  if (st.by === "never") return "Nunca se le ha hecho";
+  const partes = [];
+  if (st.kmLeft != null) partes.push(st.kmLeft <= 0 ? `${nfMoney.format(-st.kmLeft)} km pasados` : `faltan ${nfMoney.format(st.kmLeft)} km`);
+  if (st.daysLeft != null) partes.push(st.daysLeft <= 0 ? `${plural(-st.daysLeft, "día", "días")} pasados` : st.daysLeft <= 45 ? `faltan ${plural(st.daysLeft, "día", "días")}` : `faltan ${plural(Math.round(st.daysLeft / 30.44), "mes", "meses")}`);
+  return partes.join(" · ") || "Sin intervalo";
+}
+
+// Que tan urgente es, para ordenar y para el color. Menor = mas urgente.
+function taskUrgency(t, st) {
+  if (st.by === "never") return -1;
+  const porKm = st.kmLeft != null && t.everyKm ? st.kmLeft / t.everyKm : 1;
+  const porDia = st.daysLeft != null && t.everyMonths ? st.daysLeft / (t.everyMonths * 30.44) : 1;
+  return Math.min(porKm, porDia);
+}
+
+async function loadVeh() {
+  if (!isAdmin()) return setView("home");
+  if (!S.veh) {
+    try { S.veh = await api("/api/vehicles"); }
+    catch (err) { $("vehBody").innerHTML = `<div class="msg err">${esc(err.message)}</div>`; return; }
+  }
+  renderVeh();
+}
+
+async function refreshVeh() {
+  S.veh = await api("/api/vehicles");
+  // Un servicio puede haber creado un gasto del hogar: hay que releerlo.
+  if (S.spend) { try { S.spend = await api("/api/expenses"); } catch {} }
+  if (S.view === "veh") renderVeh();
+}
+
+function renderVeh() {
+  const body = $("vehBody");
+  const vehs = (S.veh.vehicles || []).filter((v) => v.active);
+
+  if (!vehs.length) {
+    body.innerHTML = `
+      <div class="card" style="margin-top:18px;">
+        ${emptyState("moto", "Anota tu moto o tu carro y la app te dice <b>qué le toca ya</b>:<br>aceite, llantas, seguro, revisión.")}
+        <div class="pad" style="padding-top:0;"><button class="btn primary wide" id="vhNew">${icon("plus")}Agregar un vehículo</button></div>
+      </div>`;
+    $("vhNew").addEventListener("click", () => vehicleForm(null));
+    return;
+  }
+
+  const v = vehs.some((x) => x.id === S.vehId) ? vehById(S.vehId) : vehs[0];
+  S.vehId = v.id;
+  const tasks = tasksOf(v.id);
+  const srv = servicesOf(v.id);
+  const estados = tasks.map((t) => ({ t, st: taskStatus(t, v) })).sort((a, b) => taskUrgency(a.t, a.st) - taskUrgency(b.t, b.st));
+  const toca = estados.filter((x) => x.st.due);
+  const pronto = estados.filter((x) => !x.st.due && taskUrgency(x.t, x.st) <= 0.25);
+
+  // Cuanto se ha gastado en el vehiculo, por moneda y por año.
+  const gastos = ["NIO", "USD"].map((c) => ({ cur: c, total: srv.filter((s) => s.currency === c).reduce((a, s) => a + (s.cost || 0), 0) })).filter((x) => x.total > 0);
+  const months = lastMonths(12), labels = months.map(monthLabel);
+  const curPrincipal = gastos.length ? gastos[0].cur : "NIO";
+  const porMes = months.map((m) => srv.filter((s) => s.currency === curPrincipal && monthKey(s.day) === m).reduce((a, s) => a + (s.cost || 0), 0));
+
+  const fila = ({ t, st }) => {
+    const u = taskUrgency(t, st);
+    const cls = st.due ? "bad" : u <= 0.25 ? "warn" : "";
+    return `
+      <button class="list-item" data-task="${t.id}">
+        ${icon("wrench")}
+        <div class="grow">
+          <div class="ellip"><b>${esc(t.name)}</b></div>
+          <div class="muted">${taskText(t, st)}${st.last ? ` · última: ${prettyDay(st.last.day)}${st.last.odometer != null ? ` a ${nfMoney.format(st.last.odometer)} km` : ""}` : ""}</div>
+        </div>
+        ${st.due ? `<span class="badge off">ya toca</span>` : u <= 0.25 ? `<span class="badge warn">pronto</span>` : ""}
+        ${icon("chevron", "chev")}
+      </button>`;
+  };
+
+  body.innerHTML = `
+    <div class="row" style="margin:16px 0 0; gap:8px; align-items:flex-start;">
+      <button class="grow" id="vhPick" style="background:none; border:0; text-align:left; padding:0; color:inherit; min-width:0;">
+        <div class="row" style="gap:6px;"><h2 class="ellip" style="margin:0;">${esc(v.name)}</h2>${icon("chevdown")}</div>
+        <div class="muted ellip">${[VEH_META[v.kind]?.label, v.plate, v.year].filter(Boolean).join(" · ")}</div>
+      </button>
+      <button class="btn sm" id="vhEdit" aria-label="Editar vehículo">${icon("edit")}</button>
+    </div>
+
+    <div class="card hero" style="margin-top:12px;">
+      <div class="lbl">Kilometraje</div>
+      <div class="val">${v.odometer != null ? nfMoney.format(v.odometer) : "—"}<small style="margin-left:6px;">km</small></div>
+      <div class="sub">${srv.length ? `${plural(srv.length, "servicio", "servicios")} · último ${prettyDay(v.lastDay, { year: true })}` : "Sin servicios todavía"}${gastos.length ? ` · gastado ${gastos.map((g) => money(g.total, g.cur)).join(" + ")}` : ""}</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary" id="vhAdd">${icon("plus")}Anotar servicio</button>
+      <button class="btn" id="vhTasks">${icon("wrench")}Tareas</button>
+    </div>
+
+    ${toca.length ? `
+      <h3 style="color:var(--bad);">Ya toca</h3>
+      <div class="card">${toca.map(fila).join("")}</div>` : `
+      <div class="msg ok" style="display:flex; gap:8px; align-items:center;">
+        ${icon("check")}<span class="grow">${tasks.length ? "Todo al día." : "Sin tareas de mantenimiento cargadas."}</span>
+      </div>`}
+
+    ${pronto.length ? `<h3>Pronto</h3><div class="card">${pronto.map(fila).join("")}</div>` : ""}
+
+    ${estados.length > toca.length + pronto.length ? `
+      <details class="plain card" style="margin-top:12px;">
+        <summary>${icon("chevron")}Las demás tareas (${estados.length - toca.length - pronto.length})</summary>
+        ${estados.filter((x) => !x.st.due && taskUrgency(x.t, x.st) > 0.25).map(fila).join("")}
+      </details>` : ""}
+
+    ${porMes.some((x) => x > 0) ? `
+    <div class="card pad" style="margin-top:14px;">
+      <p class="chart-title">Cuánto te cuesta al mes</p>
+      <p class="chart-sub">Últimos 12 meses · ${CUR[curPrincipal].label}</p>
+      <div id="vhChart"></div>
+      ${chartTable(labels, [{ name: "Servicios", color: SERIES[1], values: porMes }], (v2) => money(v2, curPrincipal))}
+    </div>` : ""}
+
+    <h3>Historial</h3>
+    <div class="card">
+      ${srv.length ? srv.map((s) => {
+        const t = s.taskId ? (S.veh.tasks || []).find((x) => x.id === s.taskId) : null;
+        return `
+        <button class="entry" data-srv="${s.id}">
+          <div class="dir" style="background:var(--soft); color:var(--muted);">${icon("wrench")}</div>
+          <div class="grow">
+            <div class="what ellip">${esc(s.title)}</div>
+            <div class="when">${prettyDay(s.day, { year: true })}${s.odometer != null ? ` · ${nfMoney.format(s.odometer)} km` : ""}${t ? ` · ${esc(t.name)}` : ""}${s.hasReceipt ? icon("image") : ""}</div>
+          </div>
+          <div class="amt">${s.cost == null ? "—" : money(s.cost, s.currency)}${s.expenseId ? `<small>en gastos</small>` : ""}</div>
+        </button>`;
+      }).join("") : emptyState("wrench", "Sin servicios. Anota el primero y desde ahí se calcula lo que viene.")}
+    </div>`;
+
+  if ($("vhChart")) barChart($("vhChart"), { series: [{ name: "Servicios", color: SERIES[1], values: porMes }], labels, fmtFull: (x) => money(x, curPrincipal) });
+  $("vhPick").addEventListener("click", pickVehicle);
+  $("vhEdit").addEventListener("click", () => vehicleForm(v));
+  $("vhAdd").addEventListener("click", () => serviceForm({ vehicleId: v.id, day: S.veh.today, odometer: v.odometer ?? "" }));
+  $("vhTasks").addEventListener("click", tasksScreen);
+  body.querySelectorAll("[data-task]").forEach((b) => b.addEventListener("click", () => {
+    const t = tasks.find((x) => x.id === Number(b.dataset.task));
+    taskDetail(t, v);
+  }));
+  body.querySelectorAll("[data-srv]").forEach((b) => b.addEventListener("click", () => serviceDetail(Number(b.dataset.srv))));
+}
+
+function pickVehicle() {
+  const vehs = S.veh.vehicles || [];
+  openModal(`
+    <h2>Mis vehículos</h2>
+    <div class="card">
+      ${vehs.map((v) => `
+        <button class="list-item" data-v="${v.id}">
+          ${icon(VEH_META[v.kind]?.icon || "wrench")}
+          <div class="grow">
+            <div class="ellip"><b>${esc(v.name)}</b>${v.active ? "" : ' <span class="badge off">archivado</span>'}</div>
+            <div class="muted">${[VEH_META[v.kind]?.label, v.plate].filter(Boolean).join(" · ")}${v.odometer != null ? ` · ${nfMoney.format(v.odometer)} km` : ""}</div>
+          </div>
+          ${v.id === S.vehId ? icon("check", "chev") : icon("chevron", "chev")}
+        </button>`).join("")}
+    </div>
+    <button class="btn wide" id="vhNew2" style="margin-top:12px;">${icon("plus")}Agregar un vehículo</button>`);
+  $("modalRoot").querySelectorAll("[data-v]").forEach((b) => b.addEventListener("click", () => {
+    S.vehId = Number(b.dataset.v); closeModal(); renderVeh();
+  }));
+  $("vhNew2").addEventListener("click", () => vehicleForm(null));
+}
+
+function vehicleForm(v) {
+  const isNew = !v;
+  openModal(`
+    <h2>${isNew ? "Nuevo vehículo" : esc(v.name)}</h2>
+    ${isNew ? `<p class="muted" style="margin:-6px 0 14px;">Al crearlo se le cargan las tareas típicas (aceite, llantas, seguro…) con sus intervalos. Después las ajustas.</p>` : ""}
+    <form id="vForm" class="card pad">
+      <label class="field"><span>Nombre *</span><input id="vName" required maxlength="80" value="${esc(v?.name || "")}" placeholder="Mi moto, el carro…"></label>
+      <div class="two">
+        <label class="field"><span>Tipo</span>
+          <select id="vKind" ${isNew ? "" : "disabled"}>${Object.entries(VEH_META).map(([k, m]) => `<option value="${k}" ${(v?.kind || "moto") === k ? "selected" : ""}>${m.label}</option>`).join("")}</select>
+          ${isNew ? "" : `<small class="hint">No se cambia: las tareas ya están creadas.</small>`}</label>
+        <label class="field"><span>Año</span><input id="vYear" type="number" inputmode="numeric" min="1900" max="2100" value="${v?.year ?? ""}" placeholder="2019"></label>
+      </div>
+      <label class="field"><span>Placa</span><input id="vPlate" maxlength="20" value="${esc(v?.plate || "")}" placeholder="M 123456"></label>
+      <label class="field"><span>Nota</span><textarea id="vNote" maxlength="300" placeholder="Color, motor, lo que convenga recordar">${esc(v?.note || "")}</textarea></label>
+      ${isNew ? "" : `<label class="row" style="margin-bottom:12px; gap:8px;"><input type="checkbox" id="vActive" ${v.active ? "checked" : ""} style="width:20px; height:20px;"><span>En uso</span><small class="muted" style="margin-left:auto;">archivado = ya no es mío</small></label>`}
+      <div id="vMsg"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Crear" : "Guardar"}</button>
+    </form>
+    ${isNew ? "" : `<button class="btn danger wide" id="vDel" style="margin-top:10px;">${icon("trash")}Borrar definitivamente</button>`}`);
+  $("vForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = { name: $("vName").value, plate: $("vPlate").value, year: $("vYear").value, note: $("vNote").value };
+    if (isNew) body.kind = $("vKind").value;
+    if (!isNew) body.active = $("vActive").checked;
+    try {
+      const r = isNew ? await api("/api/vehicles", { method: "POST", body }) : await api(`/api/vehicles?id=${v.id}`, { method: "PUT", body });
+      closeModal(); toast(isNew ? "Vehículo creado" : "Guardado");
+      if (isNew) S.vehId = r.vehicle.id;
+      await refreshVeh();
+    } catch (err) { showErr("vMsg", err); }
+  });
+  $("vDel")?.addEventListener("click", async () => {
+    if (!(await ask({
+      title: `¿Borrar "${v.name}"?`,
+      text: `Se borran sus ${plural(v.services, "servicio", "servicios")}, sus tareas y sus facturas${v.services ? ", y los gastos del hogar que salieron de ellos" : ""}. Si solo ya no es tuyo, archívalo.`,
+      ok: "Borrar todo", danger: true,
+    }))) return;
+    try { await api(`/api/vehicles?id=${v.id}&hard=1`, { method: "DELETE" }); closeModal(); toast("Vehículo borrado"); S.vehId = null; await refreshVeh(); }
+    catch (err) { toast(err.message, "err"); }
+  });
+}
+
+/* ------------------------------ tareas ---------------------------------- */
+function tasksScreen() {
+  const v = currentVeh();
+  const tasks = (S.veh.tasks || []).filter((t) => t.vehicleId === v.id);
+  const intervalo = (t) => [t.everyKm ? `cada ${nfMoney.format(t.everyKm)} km` : null, t.everyMonths ? `cada ${plural(t.everyMonths, "mes", "meses")}` : null].filter(Boolean).join(" o ");
+  openModal(`
+    <h2>Tareas de ${esc(v.name)}</h2>
+    <p class="muted" style="margin:-6px 0 12px;">Lo que hay que repetir. Si pones las dos cosas, toca <b>lo que llegue primero</b>: "cada 3.000 km o cada 6 meses".</p>
+    <div class="card">
+      ${tasks.length ? tasks.map((t) => `
+        <button class="list-item" data-t="${t.id}">
+          ${icon("wrench")}
+          <div class="grow">
+            <div class="ellip"><b>${esc(t.name)}</b>${t.active ? "" : ' <span class="badge off">archivada</span>'}</div>
+            <div class="muted">${intervalo(t) || "sin intervalo"}</div>
+          </div>
+          ${icon("chevron", "chev")}
+        </button>`).join("") : emptyState("wrench", "Sin tareas.")}
+    </div>
+    <button class="btn primary wide" id="tNew" style="margin-top:12px;">${icon("plus")}Nueva tarea</button>`);
+  $("modalRoot").querySelectorAll("[data-t]").forEach((b) => b.addEventListener("click", () => taskForm(tasks.find((t) => t.id === Number(b.dataset.t)))));
+  $("tNew").addEventListener("click", () => taskForm(null));
+}
+
+function taskForm(t) {
+  const isNew = !t;
+  const v = currentVeh();
+  openModal(`
+    <h2>${isNew ? "Nueva tarea" : esc(t.name)}</h2>
+    <form id="tForm" class="card pad">
+      <label class="field"><span>Qué es *</span><input id="tName" required maxlength="80" value="${esc(t?.name || "")}" placeholder="Cambio de aceite, llantas…"></label>
+      <div class="two">
+        <label class="field"><span>Cada cuántos km</span><input id="tKm" type="number" inputmode="numeric" min="1" value="${t?.everyKm ?? ""}" placeholder="3000"></label>
+        <label class="field"><span>Cada cuántos meses</span><input id="tMonths" type="number" inputmode="numeric" min="1" max="600" value="${t?.everyMonths ?? ""}" placeholder="6"></label>
+      </div>
+      <p class="muted" style="margin:-4px 0 12px;">Puedes poner uno o los dos. Con los dos, toca lo que llegue primero.</p>
+      <label class="field"><span>Nota</span><textarea id="tNote" maxlength="300" placeholder="Qué aceite, qué medida de llanta…">${esc(t?.note || "")}</textarea></label>
+      ${isNew ? "" : `<label class="row" style="margin-bottom:12px; gap:8px;"><input type="checkbox" id="tActive" ${t.active ? "checked" : ""} style="width:20px; height:20px;"><span>Tarea activa</span></label>`}
+      <div id="tMsg"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Crear" : "Guardar"}</button>
+    </form>
+    ${isNew ? "" : `<button class="btn danger wide" id="tDel" style="margin-top:10px;">${icon("trash")}Borrar la tarea</button>`}`);
+  $("tForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = { name: $("tName").value, everyKm: $("tKm").value, everyMonths: $("tMonths").value, note: $("tNote").value };
+    if (!isNew) body.active = $("tActive").checked;
+    try {
+      if (isNew) await api("/api/vehicles?task=1", { method: "POST", body: { ...body, vehicleId: v.id } });
+      else await api(`/api/vehicles?task=${t.id}`, { method: "PUT", body });
+      closeModal(); toast("Guardado"); await refreshVeh(); tasksScreen();
+    } catch (err) { showErr("tMsg", err); }
+  });
+  $("tDel")?.addEventListener("click", async () => {
+    if (!(await ask({ title: `¿Borrar "${t.name}"?`, text: "Los servicios que la atendieron quedan en el historial, sin tarea. Si solo ya no aplica, archívala.", ok: "Borrar", danger: true }))) return;
+    try { await api(`/api/vehicles?task=${t.id}&hard=1`, { method: "DELETE" }); closeModal(); toast("Tarea borrada"); await refreshVeh(); tasksScreen(); }
+    catch (err) { toast(err.message, "err"); }
+  });
+}
+
+function taskDetail(t, v) {
+  if (!t) return;
+  const st = taskStatus(t, v);
+  const hechos = servicesOf(v.id).filter((s) => s.taskId === t.id);
+  openModal(`
+    <h2>${esc(t.name)}</h2>
+    <p class="muted" style="margin:-6px 0 14px;">${esc(v.name)} · ${[t.everyKm ? `cada ${nfMoney.format(t.everyKm)} km` : null, t.everyMonths ? `cada ${plural(t.everyMonths, "mes", "meses")}` : null].filter(Boolean).join(" o ")}</p>
+    <div class="msg ${st.due ? "err" : taskUrgency(t, st) <= 0.25 ? "warn" : "ok"}">
+      <b>${st.by === "never" ? "Nunca se le ha hecho" : st.due ? "Ya toca" : "Al día"}</b> · ${taskText(t, st)}
+    </div>
+    ${t.note ? `<div class="card pad muted" style="margin-bottom:12px;">${esc(t.note)}</div>` : ""}
+    <button class="btn primary wide" id="tdDo">${icon("plus")}Anotar que se hizo</button>
+    <h3>Veces que se ha hecho</h3>
+    <div class="card">
+      ${hechos.length ? hechos.map((s) => `
+        <button class="list-item" data-srv2="${s.id}">
+          ${icon("wrench")}
+          <div class="grow">
+            <div class="ellip"><b>${prettyDay(s.day, { year: true })}</b></div>
+            <div class="muted">${s.odometer != null ? `${nfMoney.format(s.odometer)} km` : "sin km"}${s.place ? ` · ${esc(s.place)}` : ""}</div>
+          </div>
+          <span class="num">${s.cost == null ? "—" : money(s.cost, s.currency)}</span>
+        </button>`).join("") : emptyState("wrench", "Todavía no se le ha hecho.")}
+    </div>
+    <button class="btn wide" id="tdEdit" style="margin-top:12px;">${icon("edit")}Editar la tarea</button>`);
+  $("tdDo").addEventListener("click", () => serviceForm({ vehicleId: v.id, taskId: t.id, title: t.name, day: S.veh.today, odometer: v.odometer ?? "" }));
+  $("tdEdit").addEventListener("click", () => taskForm(t));
+  $("modalRoot").querySelectorAll("[data-srv2]").forEach((b) => b.addEventListener("click", () => serviceDetail(Number(b.dataset.srv2))));
+}
+
+/* ------------------------------ servicios ------------------------------- */
+function serviceForm(s) {
+  const isNew = !s.id;
+  const v = vehById(s.vehicleId) || currentVeh();
+  const tasks = tasksOf(v.id);
+  const cats = (S.spend?.categories || []).filter((c) => c.active);
+  let receipt = undefined;
+  openModal(`
+    <h2>${isNew ? "Anotar un servicio" : "Editar servicio"}</h2>
+    <p class="muted" style="margin:-6px 0 14px;">${esc(v.name)}</p>
+    <form id="sForm" class="card pad">
+      <label class="field"><span>Qué se le hizo *</span><input id="sTitle" required maxlength="120" value="${esc(s.title || "")}" placeholder="Cambio de aceite, llanta trasera…"></label>
+      <div class="two">
+        <label class="field"><span>Fecha *</span><input id="sDay" type="date" required value="${s.day || todayApp()}" max="${todayApp()}"></label>
+        <label class="field"><span>Kilometraje</span><input id="sOdo" type="number" inputmode="numeric" min="0" value="${s.odometer ?? ""}" placeholder="${v.odometer != null ? nfMoney.format(v.odometer) : "12500"}">
+          <small class="hint">De aquí sale cuándo toca la próxima.</small></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>Costo</span><input id="sCost" type="number" inputmode="decimal" step="0.01" min="0" value="${s.cost ?? ""}" placeholder="0.00">
+          <small class="hint">Vacío si no costó (garantía).</small></label>
+        <label class="field"><span>Moneda</span>
+          <select id="sCur">${Object.entries(CUR).map(([k, val]) => `<option value="${k}" ${(s.currency || "NIO") === k ? "selected" : ""}>${val.sym} ${val.label}</option>`).join("")}</select></label>
+      </div>
+      <label class="field"><span>¿Atiende una tarea?</span>
+        <select id="sTask">
+          <option value="">Ninguna (fue algo suelto)</option>
+          ${tasks.map((t) => `<option value="${t.id}" ${s.taskId === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
+        </select>
+        <small class="hint">Si la eliges, la próxima se cuenta desde este servicio.</small></label>
+      <label class="field"><span>Taller o lugar</span><input id="sPlace" maxlength="120" value="${esc(s.place || "")}" placeholder="Taller de don Luis"></label>
+      <label class="field"><span>Nota</span><textarea id="sNote" maxlength="500" placeholder="Qué se cambió, qué quedó pendiente">${esc(s.note || "")}</textarea></label>
+      ${isNew && cats.length ? `
+        <label class="field"><span>¿Anotarlo también como gasto del hogar?</span>
+          <select id="sCat">
+            <option value="">No, solo en el vehículo</option>
+            ${cats.map((c) => `<option value="${c.id}" ${/transporte|veh|moto|carro/i.test(c.name) ? "selected" : ""}>Sí, en ${esc(c.name)}</option>`).join("")}
+          </select>
+          <small class="hint">Así la plata cuenta en el mes una sola vez, y si borras el servicio se borra el gasto.</small></label>` : ""}
+      <div class="field">
+        <span>Factura</span>
+        <div id="sReceiptBox"></div>
+        <input type="file" id="sFile" accept="image/*" class="vhidden">
+      </div>
+      <div id="sMsg"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Anotar" : "Guardar cambios"}</button>
+    </form>`);
+
+  const paintReceipt = (uri) => {
+    $("sReceiptBox").innerHTML = uri
+      ? `<div class="receipt-thumb"><img src="${esc(uri)}" alt=""><button type="button" class="btn sm" id="sRm">${icon("cross")}Quitar</button></div>`
+      : `<button type="button" class="receipt-drop" id="sDrop" style="width:100%;">${icon("camera")}<div>${s.hasReceipt && receipt === undefined ? "Ya tiene factura. Toca para reemplazarla" : "Tocar para elegir una imagen"}</div></button>`;
+    $("sDrop")?.addEventListener("click", () => $("sFile").click());
+    $("sRm")?.addEventListener("click", () => { receipt = null; paintReceipt(null); });
+  };
+  paintReceipt(null);
+  if (!isNew && s.hasReceipt) {
+    api(`/api/vehicles?id=${s.id}&receipt=1`).then(({ image }) => { if (receipt === undefined && $("sReceiptBox")) paintReceipt(image); }).catch(() => {});
+  }
+  $("sFile").addEventListener("change", async () => {
+    const f = $("sFile").files[0];
+    if (!f) return;
+    try { receipt = await fileToJpeg(f); paintReceipt(receipt); }
+    catch (err) { showErr("sMsg", err); }
+    $("sFile").value = "";
+  });
+
+  $("sForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true; $("sMsg").innerHTML = "";
+    const body = {
+      day: $("sDay").value, title: $("sTitle").value, odometer: $("sOdo").value,
+      cost: $("sCost").value, currency: $("sCur").value, taskId: $("sTask").value || null,
+      place: $("sPlace").value, note: $("sNote").value,
+    };
+    if (receipt !== undefined) body.receipt = receipt;
+    try {
+      if (isNew) await api("/api/vehicles?service=1", { method: "POST", body: { ...body, vehicleId: v.id, categoryId: $("sCat")?.value || null } });
+      else await api(`/api/vehicles?service=${s.id}`, { method: "PUT", body });
+      closeModal(); toast(isNew ? "Servicio anotado" : "Guardado");
+      await refreshVeh();
+    } catch (err) { showErr("sMsg", err); btn.disabled = false; }
+  });
+}
+
+async function serviceDetail(id) {
+  const s = (S.veh.services || []).find((x) => x.id === id);
+  if (!s) return;
+  const v = vehById(s.vehicleId);
+  const t = s.taskId ? (S.veh.tasks || []).find((x) => x.id === s.taskId) : null;
+  openModal(`
+    <div class="row" style="gap:12px; margin-top:6px;">
+      <div class="dir" style="width:44px; height:44px; border-radius:999px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line); background:var(--soft); color:var(--muted);">${icon("wrench")}</div>
+      <div class="grow">
+        <div class="muted">${esc(v?.name || "")} · ${prettyDayLong(s.day)}</div>
+        <div style="font-size:22px; font-weight:600; letter-spacing:-.02em;">${esc(s.title)}</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <div class="list-item"><span class="muted" style="width:96px; flex:none;">Costo</span><span class="grow">${s.cost == null ? "No costó" : money(s.cost, s.currency)}${s.expenseId ? " · anotado en Gastos" : ""}</span></div>
+      <div class="list-item"><span class="muted" style="width:96px; flex:none;">Kilometraje</span><span class="grow">${s.odometer != null ? `${nfMoney.format(s.odometer)} km` : "—"}</span></div>
+      <div class="list-item"><span class="muted" style="width:96px; flex:none;">Tarea</span><span class="grow">${t ? esc(t.name) : "Ninguna"}</span></div>
+      ${s.place ? `<div class="list-item"><span class="muted" style="width:96px; flex:none;">Lugar</span><span class="grow">${esc(s.place)}</span></div>` : ""}
+      ${s.note ? `<div class="list-item" style="align-items:flex-start;"><span class="muted" style="width:96px; flex:none;">Nota</span><span class="grow" style="white-space:pre-wrap;">${esc(s.note)}</span></div>` : ""}
+      <div class="list-item"><span class="muted" style="width:96px; flex:none;">Anotado</span><span class="grow">${esc(s.createdBy || "—")} · ${fechaHora(s.createdAt)}</span></div>
+    </div>
+    <h3>Factura</h3>
+    <div id="sdReceipt">${s.hasReceipt ? `<div class="empty" style="padding:20px;">Cargando…</div>` : `<div class="card">${emptyState("image", "Sin factura. Puedes agregarla editando el servicio.")}</div>`}</div>
+    <div class="row" style="gap:8px; margin-top:16px;">
+      <button class="btn grow" id="sdEdit">${icon("edit")}Editar</button>
+      <button class="btn danger grow" id="sdDel">${icon("trash")}Borrar</button>
+    </div>`);
+  $("sdEdit").addEventListener("click", () => serviceForm(s));
+  $("sdDel").addEventListener("click", async () => {
+    if (!(await ask({
+      title: "¿Borrar este servicio?",
+      text: `${s.title} del ${prettyDay(s.day, { year: true })}. Se borra su factura${s.expenseId ? " y el gasto que generó en el hogar" : ""}.`,
+      ok: "Borrar", danger: true,
+    }))) return;
+    try { await api(`/api/vehicles?service=${s.id}`, { method: "DELETE" }); closeModal(); toast("Servicio borrado"); await refreshVeh(); }
+    catch (err) { toast(err.message, "err"); }
+  });
+  if (s.hasReceipt) {
+    try {
+      const { image } = await api(`/api/vehicles?id=${s.id}&receipt=1`);
+      if ($("sdReceipt")) $("sdReceipt").innerHTML = `<img class="receipt-view" src="${esc(image)}" alt="Factura">`;
+    } catch (err) { if ($("sdReceipt")) $("sdReceipt").innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
+  }
+}
+
+/* ===========================================================================
    Vista: ajustes
    =========================================================================== */
 function renderSettings() {
@@ -2605,6 +3106,11 @@ function renderSettings() {
     </div>
 
     ${admin ? `
+      <h3>Vehículo</h3>
+      <div class="card">
+        ${item("vehs", "moto", "Mis vehículos", `<span class="muted">${(S.veh?.vehicles || []).filter((v) => v.active).length || ""}</span>`)}
+      </div>
+
       <h3>Gastos del hogar</h3>
       <div class="card">
         ${item("incomes", "coins", "Mis ingresos", `<span class="muted">${(S.spend?.incomes || []).length || ""}</span>`)}
@@ -2622,7 +3128,7 @@ function renderSettings() {
   $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("[data-theme]"); if (!b) return; applyTheme(b.dataset.theme); renderSettings(); });
   $("settingsBody").querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => ({
     acc: accountNameScreen, debts: debtsScreen, users: usersScreen,
-    cats: categoriesScreen, incomes: incomesScreen, instalar: instalarApp,
+    cats: categoriesScreen, incomes: incomesScreen, vehs: () => setView("veh"), instalar: instalarApp,
     pw: passwordScreen, rec: recoveryScreen,
     out: async () => { if (await ask({ title: "¿Cerrar sesión?", ok: "Cerrar sesión", danger: true })) logout(); },
   }[b.dataset.act]())));
