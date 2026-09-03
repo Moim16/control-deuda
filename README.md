@@ -63,6 +63,29 @@ Cada movimiento lleva fecha, monto, motivo, una nota opcional y, si existe, el *
 
 En la lista, cada movimiento muestra el **saldo después de ese movimiento** en su moneda, así se ve la historia sin calcular nada.
 
+### Ingresos y capacidad de pago
+
+Sin saber lo que entra, "cuánto puedo abonar" no se puede contestar. En *Gastos → Ingresos* (o *Ajustes → Mis ingresos*) se registran dos cosas distintas:
+
+- **Ingreso fijo** — el sueldo. Se cuenta en todos los meses **desde la fecha que le pongas**. Si te aumentan, agregas otro con la fecha del aumento y los meses viejos siguen contando lo de antes. Igual que el pago por día en `asistencia-obra`, **el primer sueldo cubre hacia atrás**: uno anota su sueldo hoy y no espera que los meses anteriores aparezcan en cero.
+- **Ingreso extra** — lo que entró una sola vez ese día: aguinaldo, un trabajito, la venta de algo.
+
+Con eso, la pestaña Gastos muestra **cómo va el mes**, como una cuenta de papel:
+
+```
+Entró (sueldo C$26,000 + extras C$4,000)   +C$30,000
+Gastos del hogar                           −C$21,375
+Abonado a deudas                            −C$1,000
+─────────────────────────────────────────────────────
+Te queda                                     C$7,625
+```
+
+Y debajo, la **capacidad de pago**: *"Ganando C$26,000 y gastando C$18,050 al mes (promedio de 3 meses), puedes abonar hasta C$7,950 al mes sin apretarte"*, con un botón que abre el simulador con ese monto ya puesto. El simulador también lo enseña arriba y lo propone como abono por defecto.
+
+> **El promedio es de los meses CERRADOS, no del mes en curso.** Un mes que va por el día 3 siempre se ve mejor de lo que es, y prometer un abono con ese número es cómo uno queda mal. Tampoco se descuenta lo que ya abonas: la pregunta es cuánto puedes comprometer en total, y lo que ya pagas es parte de eso.
+
+Los ingresos son del dueño, como los gastos: quien entra de solo lectura no ve cuánto gana uno.
+
 ### Gastos del hogar
 
 La pestaña **Gastos** (solo del dueño) lleva el gasto del mes contra un presupuesto.
@@ -138,7 +161,7 @@ Sin build ni framework:
 - **Auth**: propia — scrypt (`salt:hash`) + `sessionToken` en el header `x-session-token`. Lockout de 5 intentos / 15 min
 - **Esquema**: se auto-crea con `ensureSchema()` (`CREATE TABLE IF NOT EXISTS` + `ALTER` idempotentes). No hay migraciones
 
-### Funciones serverless (7 de las 12 del plan Hobby)
+### Funciones serverless (8 de las 12 del plan Hobby)
 
 | Endpoint | Qué hace |
 |---|---|
@@ -149,6 +172,7 @@ Sin build ni framework:
 | `api/summary.js` | Todo lo que necesita el Resumen en una sola llamada |
 | `api/categories.js` | Categorías del gasto y su presupuesto mensual (solo dueño) |
 | `api/expenses.js` | Gastos del hogar y la captura de cada recibo (solo dueño) |
+| `api/incomes.js` | Ingresos: el sueldo con su historial y los extras (solo dueño) |
 
 ### Tablas
 
@@ -167,6 +191,7 @@ comments     comentarios; entryId NULL = sobre la deuda en general
 categories   gavetas del gasto del hogar + presupuesto mensual y su moneda
 expenses     un gasto por fila; categoryId NULL = sin categoría
 expense_receipts  la captura del recibo, misma idea que receipts
+incomes      ingresos: kind monthly (el sueldo, rige DESDE day) u once
 ```
 
 Decisiones que importan:
@@ -187,11 +212,13 @@ node scripts/dev.mjs                    # http://localhost:3000  (base local en 
 node --env-file=.env scripts/dev.mjs    # igual, pero contra Turso
 ```
 
-`scripts/dev.mjs` sirve los estáticos y enruta `/api/<x>` a `api/<x>.js` igual que Vercel, con las mismas cabeceras de seguridad de `vercel.json`. Cachea los handlers: si tocas `api/` o `lib/`, reinícialo.
+`scripts/dev.mjs` sirve los estáticos y enruta `/api/<x>` a `api/<x>.js` igual que Vercel, con las mismas cabeceras de seguridad de `vercel.json`.
+
+> **Cachea los handlers: si tocas `api/` o `lib/`, reinícialo.** Si no, la app sigue hablando con la versión anterior del backend y uno se pasa un rato buscando un fallo que no existe (pasó: la pantalla decía "anota tu ingreso" mientras el ingreso ya estaba guardado).
 
 ```bash
-node scripts/smoke.mjs        # 159 pruebas contra los handlers reales (base VACÍA); borra lo que crea
-node scripts/ui-check.mjs     # 36 comprobaciones de la interfaz, sin navegador
+node scripts/smoke.mjs        # 175 pruebas contra los handlers reales (base VACÍA); borra lo que crea
+node scripts/ui-check.mjs     # 46 comprobaciones de la interfaz, sin navegador
 node scripts/demo.mjs         # datos de muestra: moises / deuda1234 (dueño), hermano / deuda1234 (lectura)
 ```
 

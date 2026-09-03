@@ -352,6 +352,17 @@ details.plain[open] summary svg { transform:rotate(90deg); }
 /* --------------------------------------------------------------- gastos --
    Fila de categoria: nombre, monto y una barra que compara con la categoria
    mas alta del mes (o con su propio tope si lo tiene). */
+/* Cuentas del mes: entro / salio / queda. Una fila por linea, el total con
+   una raya arriba, como una cuenta de papel. */
+.flow-row { display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:6px 0; font-size:14.5px; }
+.flow-row span { color:var(--muted); }
+.flow-row b { font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap; }
+.flow-row b.good { color:var(--ok); }
+.flow-row b.bad { color:var(--bad); }
+.flow-row.total { border-top:1px solid var(--line-2); margin-top:5px; padding-top:9px; font-size:16px; }
+.flow-row.total span { color:var(--ink); font-weight:600; }
+.flow-row.total b { font-size:19px; letter-spacing:-.02em; }
+
 .cat-row {
   display:block; width:100%; text-align:left; background:none; border:0; padding:11px 0;
   color:inherit; border-bottom:1px solid var(--line);
@@ -1055,7 +1066,7 @@ function setView(v) {
   if (v === "home") renderHome();
   if (v === "debt") loadDebt();
   if (v === "spend") loadSpend();
-  if (v === "sim") renderSim();
+  if (v === "sim") ensureSpend().then(renderSim);
   if (v === "settings") renderSettings();
 }
 
@@ -1850,7 +1861,13 @@ function renderSim() {
   if (!opts.length) { body.innerHTML = `<div class="card">${emptyState("calc", "No hay nada con saldo para simular.")}</div>`; return; }
   const sc = S.simScen && opts.some((o) => o.key === S.simScen.key) ? S.simScen : null;
   const o0 = sc ? opts.find((o) => o.key === sc.key) : (opts.find((o) => o.debt.id === S.debtId) || opts[0]);
-  const sugerido = (o) => Math.max(1, Math.round(o.balance / 12 / (o.cur === "USD" ? 1 : 10)) * (o.cur === "USD" ? 1 : 10));
+  // Lo que se propone abonar: si la app sabe cuanto te sobra al mes, eso; si no,
+  // pagarlo en un año. Lo primero es un numero real, lo segundo un deseo.
+  const sugerido = (o) => {
+    const cap = capacityOf(o.cur);
+    if (cap && cap.free > 0) return Math.min(o.balance, Math.round(cap.free));
+    return Math.max(1, Math.round(o.balance / 12 / (o.cur === "USD" ? 1 : 10)) * (o.cur === "USD" ? 1 : 10));
+  };
   const st = sc || {
     key: o0.key, freq: "monthly", start: todayApp(), rate: o0.debt.interestRate || 0,
     amounts: [sugerido(o0)],
@@ -1868,6 +1885,13 @@ function renderSim() {
       </div>
       <label class="field"><span>Interés anual (%)</span><input type="number" id="simRate" inputmode="decimal" min="0" max="200" step="0.1" value="${st.rate}">
         <small class="hint">${d.interestRate ? `La deuda tiene ${d.interestRate}% registrado.` : "Déjalo en 0 si no cobra interés (lo normal entre familia)."}</small></label>
+      ${(() => {
+        // El dato que hace que el simulador no sea un juego: lo que de verdad
+        // te sobra al mes. Solo cuando la app lo sabe y la deuda es tuya.
+        const cap = wordSide(d) === "owe" ? capacityOf(cur) : null;
+        return cap && cap.free > 0
+          ? `<div class="msg ok" style="margin:0 0 12px;">Según tus ingresos y gastos, te sobran <b>${money(cap.free, cur)}</b> al mes.</div>` : "";
+      })()}
       <div class="field"><span>${wordSide(d) === "owed" ? "Cuánto me abona cada vez" : "Cuánto abono cada vez"} (${CUR[cur].sym}) — hasta 3 escenarios para comparar</span>
         <div id="simAmounts">${st.amounts.map((a, i) => `
           <div class="scen"><i style="background:${SERIES[i]}"></i><input type="number" inputmode="decimal" min="1" step="1" value="${a}" data-i="${i}" class="simAmt" style="padding:10px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); background:var(--card); min-height:44px;">
@@ -1960,6 +1984,70 @@ function tiempoHumano(a, b) {
    El presupuesto es un tope que uno se propone, no una regla: pasarse no
    bloquea nada, solo se pinta en rojo.
    =========================================================================== */
+/* ------------------------------------------------------------ el ingreso --
+   El sueldo del mes es el ingreso fijo VIGENTE ese mes: la fila 'monthly' con
+   la fecha mas alta que no pase del fin de ese mes. Asi un aumento se registra
+   con su fecha y los meses viejos siguen contando lo que se ganaba entonces.
+
+   Y si el mes es ANTERIOR al primer sueldo registrado, rige igual ese primero:
+   uno anota su sueldo hoy y espera que los meses de atras no aparezcan en cero
+   (la misma regla que el pago por dia en asistencia-obra).
+
+   Los ingresos de una sola vez (aguinaldo, un trabajito) se suman aparte, solo
+   en el mes en que cayeron.
+-------------------------------------------------------------------------- */
+function incomeOf(mes, cur) {
+  const incs = S.spend?.incomes || [];
+  const fijos = incs.filter((i) => i.kind === "monthly" && i.currency === cur).sort((a, b) => a.day.localeCompare(b.day));
+  const finDeMes = `${mes}-31`;
+  const vigentes = fijos.filter((i) => i.day <= finDeMes);
+  const fijo = vigentes.length ? vigentes[vigentes.length - 1] : fijos[0];
+  const extras = incs.filter((i) => i.kind === "once" && i.currency === cur && monthKey(i.day) === mes);
+  return {
+    fixed: fijo ? fijo.amount : 0,
+    fixedFrom: fijo ? fijo.day : null,
+    extra: extras.reduce((a, i) => a + i.amount, 0),
+    extras,
+    total: (fijo ? fijo.amount : 0) + extras.reduce((a, i) => a + i.amount, 0),
+    has: !!fijo || extras.length > 0,
+  };
+}
+
+// Lo que se abono a deudas (y lo que me pagaron de un cobro) en un mes. Sale de
+// los movimientos que ya trae el resumen, sin pedir nada mas.
+function debtFlowOf(mes, cur) {
+  let pagado = 0, recibido = 0;
+  for (const e of S.sum?.entries || []) {
+    if (e.kind !== "payment" || e.currency !== cur || monthKey(e.day) !== mes) continue;
+    const d = debtById(e.debtId);
+    if (dirOf(d) === "owed") recibido += e.amount; else pagado += e.amount;
+  }
+  return { pagado, recibido };
+}
+
+/* Capacidad de pago: cuanto sobra al mes para abonar, con los pies en la
+   tierra. Se compara el ingreso fijo contra lo que de VERDAD se gasta — el
+   promedio de los meses COMPLETOS anteriores, no el mes en curso, que va a
+   medias y siempre se ve mejor de lo que es.
+
+   No entra lo que ya se abona hoy: la pregunta es "de lo que me queda, cuanto
+   puedo comprometer", y lo que uno ya paga es parte de eso. */
+function capacityOf(cur, meses = 3) {
+  const hoyMes = monthKey(S.spend?.today || todayApp());
+  const previos = lastMonths(meses + 1).filter((m) => m < hoyMes);
+  if (!previos.length) return null;
+  const gastoDe = (m) => (S.spend?.expenses || []).filter((e) => e.currency === cur && monthKey(e.day) === m).reduce((a, e) => a + e.amount, 0);
+  const conDatos = previos.filter((m) => gastoDe(m) > 0);
+  const ing = incomeOf(hoyMes, cur);
+  if (!ing.fixed) return null;
+  const gastoPromedio = conDatos.length ? conDatos.reduce((a, m) => a + gastoDe(m), 0) / conDatos.length : 0;
+  return {
+    income: ing.fixed, spend: Math.round(gastoPromedio * 100) / 100,
+    free: Math.round((ing.fixed - gastoPromedio) * 100) / 100,
+    months: conDatos.length,
+  };
+}
+
 const catById = (id) => (S.spend?.categories || []).find((c) => c.id === id) || null;
 // El color de una categoria sigue a la categoria (su orden de creacion), no a
 // su posicion en la lista de este mes: si se filtra o se reordena, el verde
@@ -1968,6 +2056,13 @@ const catColor = (id) => {
   const i = (S.spend?.categories || []).findIndex((c) => c.id === id);
   return i < 0 ? "var(--faint)" : SERIES[i % SERIES.length];
 };
+
+// El simulador y la capacidad de pago necesitan los gastos, asi que se piden
+// tambien al entrar ahi (una vez; despues estan en memoria).
+async function ensureSpend() {
+  if (!isAdmin() || S.spend) return;
+  try { S.spend = await api("/api/expenses"); } catch { /* sin gastos, el simulador funciona igual */ }
+}
 
 async function loadSpend() {
   if (!isAdmin()) return setView("home");
@@ -1989,7 +2084,7 @@ function renderSpend() {
   const { categories, expenses } = S.spend;
   const activas = categories.filter((c) => c.active);
 
-  if (!categories.length) {
+  if (!categories.length && !(S.spend.incomes || []).length) {
     body.innerHTML = `
       <div class="card" style="margin-top:18px;">
         ${emptyState("cart", "Para llevar el gasto del hogar hacen falta <b>categorías</b>:<br>Comida, Casa, Transporte…")}
@@ -2016,6 +2111,12 @@ function renderSpend() {
   S.spendCur = cur;
   const enCur = delMes.filter((e) => e.currency === cur);
   const gastado = enCur.reduce((a, e) => a + e.amount, 0);
+  const ing = incomeOf(mes, cur);
+  const flujo = debtFlowOf(mes, cur);
+  // Lo que queda de verdad este mes: lo que entro menos lo que se gasto y lo
+  // que ya se abono a deudas. Lo que me pagaron de un cobro tambien entro.
+  const disponible = ing.total + flujo.recibido - gastado - flujo.pagado;
+  const cap = capacityOf(cur);
   // El presupuesto del mes es la suma de los topes de las categorias EN ESTA
   // MONEDA (las que no tienen tope no suman nada, y se avisa abajo).
   const conTope = activas.filter((c) => c.budget && c.currency === cur);
@@ -2067,6 +2168,36 @@ function renderSpend() {
       ` : `<div class="sub">Sin presupuesto puesto. Ponle un tope a tus categorías y aquí verás cuánto llevas.</div>`}
     </div>
 
+    ${ing.has ? `
+    <div class="card pad" style="margin-top:12px;">
+      <div class="row" style="margin-bottom:10px;">
+        <b class="grow">Cómo va el mes</b>
+        <button class="btn sm" id="spInc">${icon("edit")}Ingresos</button>
+      </div>
+      <div class="flow">
+        <div class="flow-row"><span>Entró${ing.extra ? ` (sueldo ${money(ing.fixed, cur)} + extras ${money(ing.extra, cur)})` : ""}</span><b class="good">+${money(ing.total, cur)}</b></div>
+        ${flujo.recibido ? `<div class="flow-row"><span>Me pagaron de un cobro</span><b class="good">+${money(flujo.recibido, cur)}</b></div>` : ""}
+        <div class="flow-row"><span>Gastos del hogar</span><b class="bad">−${money(gastado, cur)}</b></div>
+        ${flujo.pagado ? `<div class="flow-row"><span>Abonado a deudas</span><b class="bad">−${money(flujo.pagado, cur)}</b></div>` : ""}
+        <div class="flow-row total"><span>${disponible >= 0 ? "Te queda" : "Te faltó"}</span><b class="${disponible >= 0 ? "good" : "bad"}">${money(Math.abs(disponible), cur)}</b></div>
+      </div>
+      ${cap ? `
+        <div class="msg ${cap.free > 0 ? "ok" : "warn"}" style="margin:12px 0 0;">
+          ${cap.free > 0
+            ? `Ganando ${money(cap.income, cur)} y gastando ${money(cap.spend, cur)} al mes (promedio de ${plural(cap.months, "mes", "meses")}), puedes abonar hasta <b>${money(cap.free, cur)}</b> al mes sin apretarte.`
+            : `Con ${money(cap.income, cur)} de ingreso y ${money(cap.spend, cur)} de gasto promedio, no te sobra nada al mes. Habría que bajar algún gasto antes de comprometer un abono.`}
+        </div>
+        ${cap.free > 0 ? `<button class="btn wide" id="spSim" style="margin-top:8px;">${icon("calc")}Simular un abono de ${money(cap.free, cur)} al mes</button>` : ""}
+      ` : ""}
+    </div>` : `
+    <div class="card pad" style="margin-top:12px;">
+      <div class="row" style="gap:10px;">
+        ${icon("coins")}
+        <span class="grow muted">Anota tu <b>ingreso mensual</b> y la app te dice cuánto te queda y cuánto puedes abonar sin apretarte.</span>
+      </div>
+      <button class="btn wide" id="spInc" style="margin-top:10px;">${icon("plus")}Registrar mi ingreso</button>
+    </div>`}
+
     ${isAdmin() ? `<button class="btn primary wide" id="spAdd" style="margin-top:12px;">${icon("plus")}Anotar un gasto</button>` : ""}
 
     ${porCat.length ? `
@@ -2113,6 +2244,15 @@ function renderSpend() {
   $("spNext").addEventListener("click", () => { if (mes < monthKey(S.spend.today)) { S.spendMonth = shiftMonthKey(mes, 1); renderSpend(); } });
   body.querySelectorAll("[data-spc]").forEach((b) => b.addEventListener("click", () => { S.spendCur = b.dataset.spc; renderSpend(); }));
   $("spAdd")?.addEventListener("click", () => expenseForm({ day: esteMes ? S.spend.today : `${mes}-01`, currency: cur }));
+  $("spInc")?.addEventListener("click", incomesScreen);
+  // Del "puedes abonar X al mes" directo al simulador, con el monto ya puesto.
+  $("spSim")?.addEventListener("click", () => {
+    const opts = (S.sum?.debts || []).filter((d) => d.active && d.totals[cur]?.balance > 0);
+    const o = opts.find((d) => dirOf(d) === "owe") || opts[0];
+    if (!o) return toast("No tienes deudas con saldo en esta moneda.", "err");
+    S.simScen = { key: `${o.id}-${cur}`, freq: "monthly", start: todayApp(), rate: o.interestRate || 0, amounts: [Math.round(cap.free)] };
+    setView("sim");
+  });
   body.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => categoryDetail(b.dataset.cat === "" ? null : Number(b.dataset.cat), mes, cur)));
   body.querySelectorAll("[data-exp]").forEach((b) => b.addEventListener("click", () => expenseDetail(Number(b.dataset.exp))));
 }
@@ -2151,6 +2291,79 @@ function pintaTope(el, n, tope, max) {
   const y = MT + (1 - tope / top) * (H - MT - MB);
   svg.insertAdjacentHTML("beforeend",
     `<line x1="${ML}" x2="${W - MR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${SERIES[3]}" stroke-width="2" stroke-linecap="round"/>`);
+}
+
+/* --------------------------------- ingresos ------------------------------ */
+const INCOME_KIND = { monthly: "Fijo cada mes", once: "Una sola vez" };
+
+async function incomesScreen() {
+  if (!S.spend) { try { S.spend = await api("/api/expenses"); } catch (err) { return toast(err.message, "err"); } }
+  const incs = S.spend.incomes || [];
+  const fijos = incs.filter((i) => i.kind === "monthly");
+  const extras = incs.filter((i) => i.kind === "once");
+  const fila = (i) => `
+    <button class="list-item" data-i="${i.id}">
+      ${icon(i.kind === "monthly" ? "coins" : "up")}
+      <div class="grow">
+        <div class="ellip"><b>${money(i.amount, i.currency)}</b>${i.source ? ` · ${esc(i.source)}` : ""}</div>
+        <div class="muted">${i.kind === "monthly" ? `desde ${prettyDay(i.day, { year: true })}` : prettyDay(i.day, { year: true })}</div>
+      </div>
+      ${icon("chevron", "chev")}
+    </button>`;
+  openModal(`
+    <h2>Mis ingresos</h2>
+    <p class="muted" style="margin:-6px 0 12px;">El <b>ingreso fijo</b> es tu sueldo: se repite cada mes y rige desde la fecha que le pongas. Si te aumentan, agregas otro con la fecha del aumento y los meses viejos siguen contando lo de antes.</p>
+    <h3>Fijo cada mes</h3>
+    <div class="card">${fijos.length ? fijos.map(fila).join("") : emptyState("coins", "Sin ingreso fijo. Es el dato que hace falta para saber cuánto puedes abonar.")}</div>
+    ${extras.length ? `<h3>Una sola vez</h3><div class="card">${extras.map(fila).join("")}</div>` : ""}
+    <div class="row" style="gap:8px; margin-top:12px;">
+      <button class="btn primary grow" id="incNewFixed">${icon("plus")}Ingreso fijo</button>
+      <button class="btn grow" id="incNewOnce">${icon("plus")}Extra de un mes</button>
+    </div>`);
+  $("modalRoot").querySelectorAll("[data-i]").forEach((b) => b.addEventListener("click", () => incomeForm(incs.find((i) => i.id === Number(b.dataset.i)))));
+  $("incNewFixed").addEventListener("click", () => incomeForm({ kind: "monthly", currency: S.spendCur || "NIO" }));
+  $("incNewOnce").addEventListener("click", () => incomeForm({ kind: "once", currency: S.spendCur || "NIO", day: S.spend.today }));
+}
+
+function incomeForm(i) {
+  const isNew = !i.id;
+  const fijo = i.kind === "monthly";
+  openModal(`
+    <h2>${isNew ? (fijo ? "Ingreso fijo mensual" : "Ingreso extra") : "Editar ingreso"}</h2>
+    <p class="muted" style="margin:-6px 0 14px;">${fijo
+      ? "Tu sueldo: se cuenta en todos los meses desde la fecha que pongas."
+      : "Algo que entró una sola vez: aguinaldo, un trabajito, la venta de algo."}</p>
+    <form id="iForm" class="card pad">
+      <div class="two">
+        <label class="field"><span>Monto *</span><input id="iAmount" type="number" inputmode="decimal" step="0.01" min="0.01" required value="${i.amount ?? ""}" placeholder="0.00"></label>
+        <label class="field"><span>Moneda</span>
+          <select id="iCur">${Object.entries(CUR).map(([k, v]) => `<option value="${k}" ${(i.currency || "NIO") === k ? "selected" : ""}>${v.sym} ${v.label}</option>`).join("")}</select></label>
+      </div>
+      <label class="field"><span>${fijo ? "Lo gano desde *" : "Fecha *"}</span><input id="iDay" type="date" required value="${i.day || todayApp()}">
+        ${fijo ? `<small class="hint">Si es tu sueldo de siempre, pon una fecha vieja y valdrá para todos los meses.</small>` : ""}</label>
+      <label class="field"><span>De dónde viene</span><input id="iSource" maxlength="120" value="${esc(i.source || "")}" placeholder="${fijo ? "Salario, negocio…" : "Aguinaldo, trabajo extra…"}"></label>
+      <label class="field"><span>Nota (opcional)</span><textarea id="iNote" maxlength="500">${esc(i.note || "")}</textarea></label>
+      <div id="iMsg"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Guardar" : "Guardar cambios"}</button>
+    </form>
+    ${isNew ? "" : `<button class="btn danger wide" id="iDel" style="margin-top:10px;">${icon("trash")}Borrar</button>`}`);
+  $("iForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const body = { kind: i.kind, amount: $("iAmount").value, currency: $("iCur").value, day: $("iDay").value, source: $("iSource").value, note: $("iNote").value };
+    try {
+      if (isNew) await api("/api/incomes", { method: "POST", body });
+      else await api(`/api/incomes?id=${i.id}`, { method: "PUT", body });
+      closeModal(); toast("Guardado");
+      S.spendCur = body.currency;
+      await refreshSpend();
+      incomesScreen();
+    } catch (err) { showErr("iMsg", err); }
+  });
+  $("iDel")?.addEventListener("click", async () => {
+    if (!(await ask({ title: "¿Borrar este ingreso?", text: fijo ? "Los meses que contaban con él pasarán a contar el anterior (o quedarán sin ingreso)." : "", ok: "Borrar", danger: true }))) return;
+    try { await api(`/api/incomes?id=${i.id}`, { method: "DELETE" }); closeModal(); toast("Borrado"); await refreshSpend(); incomesScreen(); }
+    catch (err) { toast(err.message, "err"); }
+  });
 }
 
 /* --------------------------- detalle de una categoria ------------------- */
@@ -2394,6 +2607,7 @@ function renderSettings() {
     ${admin ? `
       <h3>Gastos del hogar</h3>
       <div class="card">
+        ${item("incomes", "coins", "Mis ingresos", `<span class="muted">${(S.spend?.incomes || []).length || ""}</span>`)}
         ${item("cats", "tag", "Categorías y presupuesto", `<span class="muted">${(S.spend?.categories || []).filter((c) => c.active).length || ""}</span>`)}
       </div>` : ""}
 
@@ -2407,7 +2621,8 @@ function renderSettings() {
     </div>`;
   $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("[data-theme]"); if (!b) return; applyTheme(b.dataset.theme); renderSettings(); });
   $("settingsBody").querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => ({
-    acc: accountNameScreen, debts: debtsScreen, users: usersScreen, cats: categoriesScreen, instalar: instalarApp,
+    acc: accountNameScreen, debts: debtsScreen, users: usersScreen,
+    cats: categoriesScreen, incomes: incomesScreen, instalar: instalarApp,
     pw: passwordScreen, rec: recoveryScreen,
     out: async () => { if (await ask({ title: "¿Cerrar sesión?", ok: "Cerrar sesión", danger: true })) logout(); },
   }[b.dataset.act]())));

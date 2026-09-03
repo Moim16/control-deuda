@@ -91,7 +91,8 @@ check("index.html trae los dos <script> de siempre", scripts.length === 2, `hay 
 // asi que no quedan en el objeto global: se las pide explicitamente al final.
 const EXPORTS = ["S", "renderHome", "renderDebt", "renderSpend", "renderSettings", "renderMoves",
   "nextDue", "dueText", "SIDE", "T", "wordSide", "sideOf", "lastMonths", "monthKey", "shiftMonthKey",
-  "catColor", "gastosHtml", "balances", "money", "simulate", "balanceByMonth", "withRunning", "niceTicks", "pickLabels"];
+  "catColor", "gastosHtml", "balances", "money", "simulate", "balanceByMonth", "withRunning", "niceTicks", "pickLabels",
+  "incomeOf", "capacityOf", "debtFlowOf"];
 const codigo = `${scripts[1]}\n;globalThis.__ui = { ${EXPORTS.join(", ")} };`;
 
 vm.createContext(ctx);
@@ -137,6 +138,11 @@ const sum = { today: dia(0), debts: [deuda, cobro], entries: movs, comments: [] 
 // prueba da igual el dia que se corra (con `dia(2)` y compañia, corriendola un
 // dia 3 los gastos se iban al mes anterior y no cuadraba nada).
 const delMes = `${mesActual}-01`;
+// El mes anterior, para tener un mes CERRADO con gastos.
+const mesPrevio = (() => {
+  const d = new Date(Number(mesActual.slice(0, 4)), Number(mesActual.slice(5, 7)) - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+})();
 const spend = {
   today: dia(0), from: delMes,
   categories: [
@@ -148,6 +154,13 @@ const spend = {
     { id: 21, categoryId: 1, day: delMes, amount: 12000, currency: "NIO", reason: "Supermercado", hasReceipt: true, createdBy: "moises", createdAt: new Date().toISOString() },
     { id: 22, categoryId: 2, day: delMes, amount: 900, currency: "NIO", reason: "Gasolina", hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
     { id: 23, categoryId: null, day: delMes, amount: 45, currency: "USD", reason: "Café", hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
+    // Un mes cerrado, para que la capacidad de pago tenga de donde sacar el
+    // promedio (el mes en curso no cuenta: va a medias).
+    { id: 24, categoryId: 1, day: `${mesPrevio}-10`, amount: 15000, currency: "NIO", reason: "Supermercado", hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
+  ],
+  incomes: [
+    { id: 31, kind: "monthly", amount: 25000, currency: "NIO", day: "2020-01-01", source: "Salario", note: null },
+    { id: 32, kind: "once", amount: 3000, currency: "NIO", day: delMes, source: "Trabajito", note: null },
   ],
 };
 
@@ -224,9 +237,55 @@ out = pintar(() => ui.renderSpend(), "spendBody");
 check("en dolares no mezcla: US$45 y sin presupuesto", out.includes("45") && out.includes("Sin presupuesto puesto"), out.slice(0, 300));
 check("el gasto sin categoria sale como 'Sin categoría'", out.includes("Sin categoría"));
 
-ui.S.spend = { ...spend, categories: [] };
+ui.S.spend = { ...spend, categories: [], incomes: [] };
 out = pintar(() => ui.renderSpend(), "spendBody");
-check("sin categorias, ofrece crear las tipicas", out.includes("spSeed"), out.slice(0, 200));
+check("sin categorias ni ingresos, ofrece crear las tipicas", out.includes("spSeed"), out.slice(0, 200));
+
+/* ========================================================================== */
+section("Ingreso y capacidad de pago");
+
+ui.S.spend = spend; ui.S.spendMonth = mesActual; ui.S.spendCur = "NIO";
+out = pintar(() => ui.renderSpend(), "spendBody");
+check("suma sueldo + extra: C$28,000 entraron", out.includes("28,000"), out.match(/[\d,]{5,}/g)?.slice(0, 8).join(" "));
+check("y dice cuanto queda del mes", out.includes("Te queda") || out.includes("Te faltó"), out.slice(0, 300));
+check("con el aviso de cuanto se puede abonar", out.includes("puedes abonar"), out.slice(0, 400));
+
+check("el sueldo vigente sale del mes que se mira", (() => {
+  const i = ui.incomeOf(mesActual, "NIO");
+  return i.fixed === 25000 && i.extra === 3000 && i.total === 28000;
+})(), JSON.stringify(ui.incomeOf(mesActual, "NIO")));
+check("un aumento manda desde su fecha, y lo viejo no se toca", (() => {
+  ui.S.spend = { ...spend, incomes: [
+    { id: 1, kind: "monthly", amount: 20000, currency: "NIO", day: "2026-01-01" },
+    { id: 2, kind: "monthly", amount: 30000, currency: "NIO", day: `${mesActual}-01` },
+  ] };
+  const ahora = ui.incomeOf(mesActual, "NIO").fixed;
+  const antes = ui.incomeOf("2026-03", "NIO").fixed;
+  ui.S.spend = spend;
+  return ahora === 30000 && antes === 20000;
+})());
+check("un mes anterior al primer sueldo cuenta igual ese primero",
+  ui.incomeOf("2019-05", "NIO").fixed === 25000, String(ui.incomeOf("2019-05", "NIO").fixed));
+check("sin ingreso en esa moneda, no inventa nada", (() => {
+  const i = ui.incomeOf(mesActual, "USD");
+  return i.total === 0 && i.has === false;
+})());
+
+check("la capacidad usa el gasto de los meses CERRADOS, no el que va a medias", (() => {
+  const cap = ui.capacityOf("NIO");
+  // Mes previo: C$15,000 de gasto. Sueldo: C$25,000 -> sobran C$10,000.
+  return cap && cap.income === 25000 && cap.spend === 15000 && cap.free === 10000;
+})(), JSON.stringify(ui.capacityOf("NIO")));
+check("sin sueldo registrado no hay capacidad que calcular", (() => {
+  ui.S.spend = { ...spend, incomes: [] };
+  const cap = ui.capacityOf("NIO");
+  ui.S.spend = spend;
+  return cap === null;
+})());
+check("los abonos del mes salen de los movimientos ya cargados", (() => {
+  const f = ui.debtFlowOf(ui.monthKey(dia(1)), "NIO");
+  return f.pagado === 10000 && f.recibido === 0;
+})(), JSON.stringify(ui.debtFlowOf(ui.monthKey(dia(1)), "NIO")));
 
 /* ========================================================================== */
 section("Las cuentas");

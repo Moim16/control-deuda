@@ -1,12 +1,17 @@
 // =============================================================================
 //  Gastos del hogar.
 //
-//  GET    /api/expenses[?months=13]   -> { categories, expenses, today }: las
-//                                        categorias y los gastos de los ultimos
-//                                        `months` meses (13 por defecto: el año
-//                                        de graficos mas el mes en curso). Todo
-//                                        en una sola llamada, que es lo que
-//                                        necesita la pantalla para pintarse.
+//  GET    /api/expenses[?months=13]   -> { categories, expenses, incomes, today }:
+//                                        las categorias, los gastos de los
+//                                        ultimos `months` meses (13 por defecto:
+//                                        el año de graficos mas el mes en curso)
+//                                        y los ingresos. Todo en una sola
+//                                        llamada, que es lo que necesita la
+//                                        pantalla para pintarse.
+//                                        Los ingresos van COMPLETOS (son pocos, y
+//                                        el sueldo fijo de hace dos años sigue
+//                                        haciendo falta para saber que se ganaba
+//                                        entonces).
 //  GET    /api/expenses?id=&receipt=1  -> { image } la captura del recibo.
 //  POST   /api/expenses                { categoryId, day, amount, currency,
 //                                        reason, note, receipt } -> registrar.
@@ -25,6 +30,7 @@ import { db, ensureSchema, nowIso, CURRENCIES } from "../lib/db.js";
 import { today } from "../lib/day.js";
 import { readJson, clean, parseId, parseDay, parseDataJpeg } from "../lib/http.js";
 import { currentUser, isAdmin, deny, notYours } from "../lib/auth.js";
+import { INC_SELECT } from "./incomes.js";
 
 const MAX_RECEIPT = 900 * 1024;   // el navegador ya achica; esto es el tope duro
 
@@ -96,8 +102,16 @@ export default async function handler(req, res) {
         sql: `${EXP_SELECT} WHERE e.accountId = ? AND e.day >= ? ORDER BY e.day DESC, e.id DESC`,
         args: [me.accountId, desde],
       });
+      const incs = await db.execute({
+        sql: `${INC_SELECT} WHERE i.accountId = ? ORDER BY i.day DESC, i.id DESC`,
+        args: [me.accountId],
+      });
       return res.status(200).json({
         today: today(), from: desde,
+        incomes: incs.rows.map((i) => ({
+          id: Number(i.id), kind: i.kind, amount: Number(i.amount), currency: i.currency,
+          day: i.day, source: i.source, note: i.note,
+        })),
         categories: cats.rows.map((c) => ({
           id: Number(c.id), name: c.name, budget: c.budget == null ? null : Number(c.budget),
           currency: c.currency, active: Number(c.active), expenses: Number(c.expenses || 0),

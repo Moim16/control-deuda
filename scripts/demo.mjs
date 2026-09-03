@@ -14,6 +14,7 @@ import entries from "../api/entries.js";
 import comments from "../api/comments.js";
 import categories from "../api/categories.js";
 import expenses from "../api/expenses.js";
+import incomes from "../api/incomes.js";
 import { db, ensureSchema } from "../lib/db.js";
 
 function call(h, { method = "GET", query = {}, body, token } = {}) {
@@ -104,7 +105,12 @@ for (const [nombre, tope] of [["Comida", 9000], ["Casa y servicios", 5000], ["Tr
 
 // Gastos de los ultimos 5 meses. El mes en curso queda un poco pasado en
 // Comida, para que se vea el aviso de que uno va sobre el presupuesto.
-const dia = (mes, d) => mesAtras(mes, d);
+//
+// En el mes EN CURSO los gastos se reparten entre los dias que YA pasaron: uno
+// fechado la semana que viene se veria raro al lado de "va el 10% del mes".
+// Si hoy es día 3, los dias 3, 7, 11... caen en 3, 1, 2, 3...
+const diaDeHoy = hoy.getDate();
+const dia = (mes, d) => mesAtras(mes, mes === 0 ? ((d - 1) % diaDeHoy) + 1 : d);
 const gastos = [];
 const receta = [
   ["Comida", [3200, 2100, 1800, 2400]], ["Casa y servicios", [2800, 1900]],
@@ -128,6 +134,13 @@ for (const [categoryId, day, amount, reason, currency] of gastos) {
   r = await call(expenses, { method: "POST", token: A, body: { categoryId, day, amount, reason, currency } });
   if (r.status !== 201) console.error("gasto fallo", r.body);
 }
+
+/* -------------------------------- ingresos -------------------------------- */
+// Un sueldo viejo y un aumento hace tres meses, para que se vea que los meses
+// anteriores siguen contando lo de antes.
+await call(incomes, { method: "POST", token: A, body: { kind: "monthly", amount: 22000, currency: "NIO", day: "2025-01-01", source: "Salario" } });
+await call(incomes, { method: "POST", token: A, body: { kind: "monthly", amount: 26000, currency: "NIO", day: mesAtras(3, 1), source: "Salario (aumento)" } });
+await call(incomes, { method: "POST", token: A, body: { kind: "once", amount: 4000, currency: "NIO", day: dia(0, 2), source: "Trabajo extra" } });
 
 console.log("\nDemo lista:");
 console.log("  moises  / deuda1234   (dueño)");

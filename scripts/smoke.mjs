@@ -17,6 +17,7 @@ import comments from "../api/comments.js";
 import summary from "../api/summary.js";
 import categories from "../api/categories.js";
 import expenses from "../api/expenses.js";
+import incomes from "../api/incomes.js";
 import { db, ensureSchema } from "../lib/db.js";
 
 let fails = 0, total = 0;
@@ -441,6 +442,38 @@ r = await call(expenses, { token: A.token });
 check("queda un solo gasto", r.body.expenses.length === 1);
 
 /* ========================================================================== */
+section("Ingresos");
+
+r = await call(incomes, { token: A.token });
+check("una cuenta nueva no tiene ingresos", r.status === 200 && r.body.incomes.length === 0, j(r.body));
+r = await call(incomes, { method: "POST", token: A.token, body: { kind: "monthly", amount: "25,000", day: "2026-01-01", source: "Salario" } });
+check("registrar el ingreso fijo", r.status === 201 && r.body.income.amount === 25000 && r.body.income.kind === "monthly", j(r.body));
+const I1 = r.body.income.id;
+r = await call(incomes, { method: "POST", token: A.token, body: { kind: "monthly", amount: 30000, day: "2026-07-01", source: "Salario (aumento)" } });
+check("un aumento es otra fila con su fecha", r.status === 201 && r.body.income.day === "2026-07-01", j(r.body));
+r = await call(incomes, { method: "POST", token: A.token, body: { kind: "once", amount: 12000, day: "2026-12-15", source: "Aguinaldo" } });
+check("y un extra de un mes", r.status === 201 && r.body.income.kind === "once", j(r.body));
+
+check("dos sueldos desde el mismo dia -> 409",
+  (await call(incomes, { method: "POST", token: A.token, body: { kind: "monthly", amount: 1, day: "2026-01-01" } })).status === 409);
+check("monto cero -> 400", (await call(incomes, { method: "POST", token: A.token, body: { amount: 0, day: "2026-01-01" } })).status === 400);
+check("sin fecha -> 400", (await call(incomes, { method: "POST", token: A.token, body: { amount: 100 } })).status === 400);
+check("tipo desconocido cae a 'monthly'",
+  (await call(incomes, { method: "POST", token: A.token, body: { kind: "weird", amount: 5, day: "2026-02-02" } })).body.income?.kind === "monthly");
+check("el viewer no ve los ingresos (403)", (await call(incomes, { token: V.token })).status === 403);
+check("ni puede registrarlos (403)", (await call(incomes, { method: "POST", token: V.token, body: { amount: 1, day: "2026-01-01" } })).status === 403);
+check("otra cuenta no puede editar mi ingreso (404)",
+  (await call(incomes, { method: "PUT", query: { id: String(I1) }, token: B.token, body: { amount: 1 } })).status === 404);
+
+r = await call(incomes, { method: "PUT", query: { id: String(I1) }, token: A.token, body: { amount: 26000 } });
+check("editar el monto", r.status === 200 && r.body.income.amount === 26000);
+r = await call(expenses, { token: A.token });
+check("los ingresos viajan con los gastos, en una sola llamada", Array.isArray(r.body.incomes) && r.body.incomes.length === 4, j(r.body.incomes?.length));
+check("y el viewer no los recibe ni por ahi", (await call(expenses, { token: V.token })).status === 403);
+check("borrar un ingreso", (await call(incomes, { method: "DELETE", query: { id: String(I1) }, token: A.token })).status === 200);
+check("uno de otra cuenta -> 404", (await call(incomes, { method: "DELETE", query: { id: String(I1) }, token: B.token })).status === 404);
+
+/* ========================================================================== */
 section("Cerrar y borrar deudas");
 
 r = await call(debts, { method: "DELETE", query: { id: String(D3) }, token: A.token });
@@ -475,7 +508,7 @@ if (process.argv.includes("--keep")) {
   await db.batch([
     "DELETE FROM receipts", "DELETE FROM comments", "DELETE FROM entries",
     "DELETE FROM debt_users", "DELETE FROM debts",
-    "DELETE FROM expense_receipts", "DELETE FROM expenses", "DELETE FROM categories",
+    "DELETE FROM expense_receipts", "DELETE FROM expenses", "DELETE FROM categories", "DELETE FROM incomes",
     "DELETE FROM users", "DELETE FROM accounts",
   ], "write");
   console.log("Datos de prueba borrados.");
