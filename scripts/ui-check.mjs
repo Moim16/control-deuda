@@ -302,9 +302,12 @@ const vTasks = [
   { id: 4, vehicleId: 1, name: "Seguro", everyKm: null, everyMonths: 12, note: null, active: 1 },
 ];
 const vServices = [
-  { id: 11, vehicleId: 1, taskId: 1, expenseId: null, day: dia(200), odometer: 10000, title: "Cambio de aceite", cost: 1200, currency: "NIO", place: "Taller Luis", note: null, hasReceipt: true, createdBy: "moises", createdAt: new Date().toISOString() },
-  { id: 12, vehicleId: 1, taskId: 2, expenseId: 21, day: dia(10), odometer: 12000, title: "Llanta trasera", cost: 500, currency: "NIO", place: null, note: null, hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
-  { id: 13, vehicleId: 1, taskId: 4, expenseId: null, day: dia(60), odometer: 11500, title: "Seguro anual", cost: null, currency: "NIO", place: null, note: null, hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
+  // Un solo mantenimiento con UN monto que cubrio aceite Y bujia, como en la
+  // casa comercial.
+  { id: 11, vehicleId: 1, kind: "service", taskIds: [1], expenseId: null, day: dia(200), odometer: 10000, title: "Mantenimiento completo", cost: 1200, currency: "NIO", place: "Casa comercial", note: null, hasReceipt: true, createdBy: "moises", createdAt: new Date().toISOString() },
+  { id: 12, vehicleId: 1, kind: "service", taskIds: [2], expenseId: 21, day: dia(10), odometer: 12000, title: "Llanta trasera", cost: 500, currency: "NIO", place: null, note: null, hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
+  { id: 13, vehicleId: 1, kind: "service", taskIds: [4], expenseId: null, day: dia(60), odometer: 11500, title: "Seguro anual", cost: null, currency: "NIO", place: null, note: null, hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
+  { id: 14, vehicleId: 1, kind: "accessory", taskIds: [], expenseId: null, day: dia(30), odometer: 11800, title: "Antivuelco", cost: 2500, currency: "NIO", place: "Casa Pellas", note: null, hasReceipt: false, createdBy: "moises", createdAt: new Date().toISOString() },
 ];
 ui.S.veh = { today: dia(0), vehicles: [moto], tasks: vTasks, services: vServices };
 ui.S.vehId = 1;
@@ -316,9 +319,23 @@ check("la bujia (nunca hecha) tambien", out.includes("Bujía"));
 check("ofrece anotar un servicio", out.includes("vhAdd"));
 // El taller no va en la lista (ahi manda la fecha y el km); se ve al abrir el
 // servicio.
-check("y lista el historial con fecha y kilometraje",
+check("y lista el mantenimiento con fecha y kilometraje",
   out.includes("Llanta trasera") && out.includes("12,000 km") && out.includes("Seguro anual"), out.slice(-500));
+check("los accesorios van en su propia seccion, con lo invertido",
+  out.includes("Accesorios y mejoras") && out.includes("Antivuelco") && out.includes("C$2,500"), out.slice(0, 900));
+check("y el mantenimiento dice qué tareas cubrió", out.includes("class=\"cubre\""), out.slice(-800));
+check("ofrece anotar mantenimiento y accesorio por separado",
+  out.includes("Anotar mantenimiento") && out.includes("Anotar accesorio"));
 check("marca los servicios que ya estan en gastos", out.includes("en gastos"));
+
+check("un mantenimiento que cubre varias tareas las pone todas al dia", (() => {
+  // El de id 11 cubre solo el aceite; se le agrega la bujia y deja de tocar.
+  const antes = ui.taskStatus(vTasks[2], moto).by;
+  ui.S.veh.services = vServices.map((x) => (x.id === 11 ? { ...x, taskIds: [1, 3] } : x));
+  const despues = ui.taskStatus(vTasks[2], moto);
+  ui.S.veh.services = vServices;
+  return antes === "never" && despues.last?.id === 11 && despues.kmLeft === 7500;
+})(), JSON.stringify(ui.taskStatus(vTasks[2], moto)));
 
 check("por km: pasado el intervalo, ya toca", (() => {
   const st = ui.taskStatus(vTasks[0], moto);   // aceite: 10.000 + 3.000 = 13.000 vs 12.500

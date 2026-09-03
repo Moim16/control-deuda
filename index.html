@@ -363,6 +363,13 @@ details.plain[open] summary svg { transform:rotate(90deg); }
 .flow-row.total span { color:var(--ink); font-weight:600; }
 .flow-row.total b { font-size:19px; letter-spacing:-.02em; }
 
+/* Lo que cubrio un mantenimiento: etiquetas chiquitas bajo el titulo. */
+.entry .cubre { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
+.entry .cubre span {
+  font-size:10.5px; padding:1px 7px; border-radius:999px; color:var(--muted);
+  background:var(--soft); border:1px solid var(--line); white-space:nowrap;
+}
+
 .cat-row {
   display:block; width:100%; text-align:left; background:none; border:0; padding:11px 0;
   color:inherit; border-bottom:1px solid var(--line);
@@ -2611,6 +2618,11 @@ const vehById = (id) => (S.veh?.vehicles || []).find((v) => v.id === id) || null
 const currentVeh = () => vehById(S.vehId) || (S.veh?.vehicles || []).find((v) => v.active) || null;
 const tasksOf = (vehId) => (S.veh?.tasks || []).filter((t) => t.vehicleId === vehId && t.active);
 const servicesOf = (vehId) => (S.veh?.services || []).filter((s) => s.vehicleId === vehId);
+// El mantenimiento y las reparaciones por un lado; los accesorios por otro. Un
+// accesorio no es algo que haya que repetir: es una mejora, y lo que uno quiere
+// saber de ellos es cuanto lleva invertido.
+const mantOf = (vehId) => servicesOf(vehId).filter((s) => s.kind !== "accessory");
+const accsOf = (vehId) => servicesOf(vehId).filter((s) => s.kind === "accessory");
 
 /* Estado de una tarea: cuando toca por km, cuando por fecha, y cual manda.
 
@@ -2621,7 +2633,10 @@ const servicesOf = (vehId) => (S.veh?.services || []).filter((s) => s.vehicleId 
      due      true si ya toca (por cualquiera de las dos)
      by       'km' | 'date' | 'never': que fue lo que la hizo tocar */
 function taskStatus(task, veh) {
-  const hechos = servicesOf(veh.id).filter((s) => s.taskId === task.id);
+  // Un mismo servicio puede haber cubierto varias tareas (el mantenimiento de
+  // la casa comercial cubre aceite, filtro y cadena de un tiro), asi que se
+  // busca en la lista de tareas que cubrio, no en un solo campo.
+  const hechos = servicesOf(veh.id).filter((s) => (s.taskIds || []).includes(task.id));
   const last = hechos.length ? cronologico(hechos)[hechos.length - 1] : null;
   const hoy = S.veh?.today || todayApp();
   if (!last) return { last: null, kmLeft: null, daysLeft: null, due: true, overdue: false, by: "never" };
@@ -2694,6 +2709,8 @@ function renderVeh() {
   S.vehId = v.id;
   const tasks = tasksOf(v.id);
   const srv = servicesOf(v.id);
+  const mant = mantOf(v.id);
+  const accs = accsOf(v.id);
   const estados = tasks.map((t) => ({ t, st: taskStatus(t, v) })).sort((a, b) => taskUrgency(a.t, a.st) - taskUrgency(b.t, b.st));
   const toca = estados.filter((x) => x.st.due);
   const pronto = estados.filter((x) => !x.st.due && taskUrgency(x.t, x.st) <= 0.25);
@@ -2735,9 +2752,10 @@ function renderVeh() {
     </div>
 
     <div class="actions">
-      <button class="btn primary" id="vhAdd">${icon("plus")}Anotar servicio</button>
-      <button class="btn" id="vhTasks">${icon("wrench")}Tareas</button>
+      <button class="btn primary" id="vhAdd">${icon("wrench")}Anotar mantenimiento</button>
+      <button class="btn" id="vhAcc">${icon("plus")}Anotar accesorio</button>
     </div>
+    <button class="btn sm wide" id="vhTasks" style="margin-bottom:6px;">${icon("list")}Tareas y sus intervalos</button>
 
     ${toca.length ? `
       <h3 style="color:var(--bad);">Ya toca</h3>
@@ -2762,26 +2780,50 @@ function renderVeh() {
       ${chartTable(labels, [{ name: "Servicios", color: SERIES[1], values: porMes }], (v2) => money(v2, curPrincipal))}
     </div>` : ""}
 
-    <h3>Historial</h3>
+    ${accs.length ? `
+    <div class="sec-head"><h3 style="margin:0;">Accesorios y mejoras</h3><span class="muted">${["NIO", "USD"].map((c) => {
+      const t2 = accs.filter((x) => x.currency === c).reduce((a2, x) => a2 + (x.cost || 0), 0);
+      return t2 ? money(t2, c) : null;
+    }).filter(Boolean).join(" + ")}</span></div>
     <div class="card">
-      ${srv.length ? srv.map((s) => {
-        const t = s.taskId ? (S.veh.tasks || []).find((x) => x.id === s.taskId) : null;
+      ${accs.map((s) => `
+        <button class="entry" data-srv="${s.id}">
+          <div class="dir" style="background:var(--soft); color:${SERIES[2]};">${icon("plus")}</div>
+          <div class="grow">
+            <div class="what ellip">${esc(s.title)}</div>
+            <div class="when">${prettyDay(s.day, { year: true })}${s.place ? ` · ${esc(s.place)}` : ""}${s.hasReceipt ? icon("image") : ""}</div>
+          </div>
+          <div class="amt">${s.cost == null ? "—" : money(s.cost, s.currency)}${s.expenseId ? `<small>en gastos</small>` : ""}</div>
+        </button>`).join("")}
+    </div>` : ""}
+
+    <h3>Mantenimiento hecho</h3>
+    <div class="card">
+      ${mant.length ? mant.map((s) => {
+        const cubre = (s.taskIds || []).map((id) => (S.veh.tasks || []).find((x) => x.id === id)?.name).filter(Boolean);
         return `
         <button class="entry" data-srv="${s.id}">
           <div class="dir" style="background:var(--soft); color:var(--muted);">${icon("wrench")}</div>
           <div class="grow">
             <div class="what ellip">${esc(s.title)}</div>
-            <div class="when">${prettyDay(s.day, { year: true })}${s.odometer != null ? ` · ${nfMoney.format(s.odometer)} km` : ""}${t ? ` · ${esc(t.name)}` : ""}${s.hasReceipt ? icon("image") : ""}</div>
+            <div class="when">${prettyDay(s.day, { year: true })}${s.odometer != null ? ` · ${nfMoney.format(s.odometer)} km` : ""}${s.hasReceipt ? icon("image") : ""}</div>
+            ${cubre.length ? `<div class="cubre">${cubre.map((n) => `<span>${esc(n)}</span>`).join("")}</div>` : ""}
           </div>
           <div class="amt">${s.cost == null ? "—" : money(s.cost, s.currency)}${s.expenseId ? `<small>en gastos</small>` : ""}</div>
         </button>`;
-      }).join("") : emptyState("wrench", "Sin servicios. Anota el primero y desde ahí se calcula lo que viene.")}
+      }).join("") : emptyState("wrench", "Sin mantenimientos. Anota el primero y desde ahí se calcula lo que viene.")}
     </div>`;
 
   if ($("vhChart")) barChart($("vhChart"), { series: [{ name: "Servicios", color: SERIES[1], values: porMes }], labels, fmtFull: (x) => money(x, curPrincipal) });
   $("vhPick").addEventListener("click", pickVehicle);
   $("vhEdit").addEventListener("click", () => vehicleForm(v));
-  $("vhAdd").addEventListener("click", () => serviceForm({ vehicleId: v.id, day: S.veh.today, odometer: v.odometer ?? "" }));
+  // El mantenimiento arranca con las tareas que YA TOCAN marcadas: es lo que
+  // le acaban de hacer en la casa comercial.
+  $("vhAdd").addEventListener("click", () => serviceForm({
+    vehicleId: v.id, kind: "service", day: S.veh.today, odometer: v.odometer ?? "",
+    title: "Mantenimiento", taskIds: toca.map((x) => x.t.id),
+  }));
+  $("vhAcc").addEventListener("click", () => serviceForm({ vehicleId: v.id, kind: "accessory", day: S.veh.today, odometer: v.odometer ?? "" }));
   $("vhTasks").addEventListener("click", tasksScreen);
   body.querySelectorAll("[data-task]").forEach((b) => b.addEventListener("click", () => {
     const t = tasks.find((x) => x.id === Number(b.dataset.task));
@@ -2917,7 +2959,7 @@ function taskForm(t) {
 function taskDetail(t, v) {
   if (!t) return;
   const st = taskStatus(t, v);
-  const hechos = servicesOf(v.id).filter((s) => s.taskId === t.id);
+  const hechos = servicesOf(v.id).filter((s) => (s.taskIds || []).includes(t.id));
   openModal(`
     <h2>${esc(t.name)}</h2>
     <p class="muted" style="margin:-6px 0 14px;">${esc(v.name)} · ${[t.everyKm ? `cada ${nfMoney.format(t.everyKm)} km` : null, t.everyMonths ? `cada ${plural(t.everyMonths, "mes", "meses")}` : null].filter(Boolean).join(" o ")}</p>
@@ -2939,7 +2981,7 @@ function taskDetail(t, v) {
         </button>`).join("") : emptyState("wrench", "Todavía no se le ha hecho.")}
     </div>
     <button class="btn wide" id="tdEdit" style="margin-top:12px;">${icon("edit")}Editar la tarea</button>`);
-  $("tdDo").addEventListener("click", () => serviceForm({ vehicleId: v.id, taskId: t.id, title: t.name, day: S.veh.today, odometer: v.odometer ?? "" }));
+  $("tdDo").addEventListener("click", () => serviceForm({ vehicleId: v.id, kind: "service", taskIds: [t.id], title: t.name, day: S.veh.today, odometer: v.odometer ?? "" }));
   $("tdEdit").addEventListener("click", () => taskForm(t));
   $("modalRoot").querySelectorAll("[data-srv2]").forEach((b) => b.addEventListener("click", () => serviceDetail(Number(b.dataset.srv2))));
 }
@@ -2950,12 +2992,14 @@ function serviceForm(s) {
   const v = vehById(s.vehicleId) || currentVeh();
   const tasks = tasksOf(v.id);
   const cats = (S.spend?.categories || []).filter((c) => c.active);
+  const esAcc = s.kind === "accessory";
+  const marcadas = new Set(s.taskIds || []);
   let receipt = undefined;
   openModal(`
-    <h2>${isNew ? "Anotar un servicio" : "Editar servicio"}</h2>
-    <p class="muted" style="margin:-6px 0 14px;">${esc(v.name)}</p>
+    <h2>${isNew ? (esAcc ? "Anotar un accesorio" : "Anotar mantenimiento") : esAcc ? "Editar accesorio" : "Editar mantenimiento"}</h2>
+    <p class="muted" style="margin:-6px 0 14px;">${esc(v.name)}${esAcc ? "" : " · Un solo registro con el monto que pagaste, marcando todo lo que te hicieron."}</p>
     <form id="sForm" class="card pad">
-      <label class="field"><span>Qué se le hizo *</span><input id="sTitle" required maxlength="120" value="${esc(s.title || "")}" placeholder="Cambio de aceite, llanta trasera…"></label>
+      <label class="field"><span>${esAcc ? "Qué le pusiste *" : "Qué se le hizo *"}</span><input id="sTitle" required maxlength="120" value="${esc(s.title || "")}" placeholder="${esAcc ? "Antivuelco, pescantes, parrilla…" : "Mantenimiento, reparación del arranque…"}"></label>
       <div class="two">
         <label class="field"><span>Fecha *</span><input id="sDay" type="date" required value="${s.day || todayApp()}" max="${todayApp()}"></label>
         <label class="field"><span>Kilometraje</span><input id="sOdo" type="number" inputmode="numeric" min="0" value="${s.odometer ?? ""}" placeholder="${v.odometer != null ? nfMoney.format(v.odometer) : "12500"}">
@@ -2967,13 +3011,23 @@ function serviceForm(s) {
         <label class="field"><span>Moneda</span>
           <select id="sCur">${Object.entries(CUR).map(([k, val]) => `<option value="${k}" ${(s.currency || "NIO") === k ? "selected" : ""}>${val.sym} ${val.label}</option>`).join("")}</select></label>
       </div>
-      <label class="field"><span>¿Atiende una tarea?</span>
-        <select id="sTask">
-          <option value="">Ninguna (fue algo suelto)</option>
-          ${tasks.map((t) => `<option value="${t.id}" ${s.taskId === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}
-        </select>
-        <small class="hint">Si la eliges, la próxima se cuenta desde este servicio.</small></label>
-      <label class="field"><span>Taller o lugar</span><input id="sPlace" maxlength="120" value="${esc(s.place || "")}" placeholder="Taller de don Luis"></label>
+      ${esAcc ? "" : `
+      <div class="field" id="sTasksBox">
+        <span>¿Qué te hicieron? Marca todo lo que cubrió</span>
+        <div class="card">
+          ${tasks.length ? tasks.map((t) => {
+            const st = taskStatus(t, v);
+            return `
+            <label class="list-item" style="cursor:pointer;">
+              <input type="checkbox" class="sTask" value="${t.id}" style="width:20px; height:20px;" ${marcadas.has(t.id) ? "checked" : ""}>
+              <span class="grow ellip">${esc(t.name)}</span>
+              ${st.due ? '<span class="badge off">tocaba</span>' : ""}
+            </label>`;
+          }).join("") : emptyState("wrench", "Este vehículo no tiene tareas.")}
+        </div>
+        <small class="hint">Desde aquí se cuenta cuándo vuelve a tocar cada una. Si fue una reparación suelta, no marques nada.</small>
+      </div>`}
+      <label class="field"><span>${esAcc ? "Dónde lo compraste" : "Taller o casa comercial"}</span><input id="sPlace" maxlength="120" value="${esc(s.place || "")}" placeholder="${esAcc ? "Casa Pellas, un amigo…" : "Casa comercial, taller de don Luis"}"></label>
       <label class="field"><span>Nota</span><textarea id="sNote" maxlength="500" placeholder="Qué se cambió, qué quedó pendiente">${esc(s.note || "")}</textarea></label>
       ${isNew && cats.length ? `
         <label class="field"><span>¿Anotarlo también como gasto del hogar?</span>
@@ -3016,14 +3070,16 @@ function serviceForm(s) {
     btn.disabled = true; $("sMsg").innerHTML = "";
     const body = {
       day: $("sDay").value, title: $("sTitle").value, odometer: $("sOdo").value,
-      cost: $("sCost").value, currency: $("sCur").value, taskId: $("sTask").value || null,
+      cost: $("sCost").value, currency: $("sCur").value,
+      kind: esAcc ? "accessory" : "service",
+      taskIds: esAcc ? [] : [...document.querySelectorAll(".sTask:checked")].map((c) => Number(c.value)),
       place: $("sPlace").value, note: $("sNote").value,
     };
     if (receipt !== undefined) body.receipt = receipt;
     try {
       if (isNew) await api("/api/vehicles?service=1", { method: "POST", body: { ...body, vehicleId: v.id, categoryId: $("sCat")?.value || null } });
       else await api(`/api/vehicles?service=${s.id}`, { method: "PUT", body });
-      closeModal(); toast(isNew ? "Servicio anotado" : "Guardado");
+      closeModal(); toast(isNew ? (esAcc ? "Accesorio anotado" : "Mantenimiento anotado") : "Guardado");
       await refreshVeh();
     } catch (err) { showErr("sMsg", err); btn.disabled = false; }
   });
@@ -3033,7 +3089,7 @@ async function serviceDetail(id) {
   const s = (S.veh.services || []).find((x) => x.id === id);
   if (!s) return;
   const v = vehById(s.vehicleId);
-  const t = s.taskId ? (S.veh.tasks || []).find((x) => x.id === s.taskId) : null;
+  const cubre = (s.taskIds || []).map((id2) => (S.veh.tasks || []).find((x) => x.id === id2)?.name).filter(Boolean);
   openModal(`
     <div class="row" style="gap:12px; margin-top:6px;">
       <div class="dir" style="width:44px; height:44px; border-radius:999px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line); background:var(--soft); color:var(--muted);">${icon("wrench")}</div>
@@ -3045,7 +3101,7 @@ async function serviceDetail(id) {
     <div class="card" style="margin-top:14px;">
       <div class="list-item"><span class="muted" style="width:96px; flex:none;">Costo</span><span class="grow">${s.cost == null ? "No costó" : money(s.cost, s.currency)}${s.expenseId ? " · anotado en Gastos" : ""}</span></div>
       <div class="list-item"><span class="muted" style="width:96px; flex:none;">Kilometraje</span><span class="grow">${s.odometer != null ? `${nfMoney.format(s.odometer)} km` : "—"}</span></div>
-      <div class="list-item"><span class="muted" style="width:96px; flex:none;">Tarea</span><span class="grow">${t ? esc(t.name) : "Ninguna"}</span></div>
+      <div class="list-item" style="align-items:flex-start;"><span class="muted" style="width:96px; flex:none;">${s.kind === "accessory" ? "Tipo" : "Cubrió"}</span><span class="grow">${s.kind === "accessory" ? "Accesorio o mejora" : cubre.length ? esc(cubre.join(", ")) : "Nada en particular (reparación suelta)"}</span></div>
       ${s.place ? `<div class="list-item"><span class="muted" style="width:96px; flex:none;">Lugar</span><span class="grow">${esc(s.place)}</span></div>` : ""}
       ${s.note ? `<div class="list-item" style="align-items:flex-start;"><span class="muted" style="width:96px; flex:none;">Nota</span><span class="grow" style="white-space:pre-wrap;">${esc(s.note)}</span></div>` : ""}
       <div class="list-item"><span class="muted" style="width:96px; flex:none;">Anotado</span><span class="grow">${esc(s.createdBy || "—")} · ${fechaHora(s.createdAt)}</span></div>

@@ -18,9 +18,15 @@
 //  DELETE /api/vehicles?task=        -> archiva; con &hard=1 la borra (sus
 //                                       servicios quedan sin tarea, no se borran).
 //
-//  POST   /api/vehicles?service=1    { vehicleId, taskId, day, odometer, title,
-//                                      cost, currency, place, note, receipt,
-//                                      categoryId } -> registrar un servicio.
+//  POST   /api/vehicles?service=1    { vehicleId, kind, taskIds[], day, odometer,
+//                                      title, cost, currency, place, note,
+//                                      receipt, categoryId } -> registrar.
+//                                      `kind`: 'service' (mantenimiento o
+//                                      reparacion) o 'accessory' (algo que se le
+//                                      puso). Un solo registro con UN monto
+//                                      puede cubrir varias tareas a la vez
+//                                      (`taskIds`), que es como se hace en la
+//                                      casa comercial.
 //                                      Con `categoryId` se anota tambien como
 //                                      GASTO del hogar en esa categoria, y el
 //                                      servicio se queda con su id: asi la plata
@@ -32,7 +38,7 @@
 //  Todo es del DUEÑO: exige admin, incluso leer.
 // =============================================================================
 
-import { db, ensureSchema, nowIso, CURRENCIES, VEHICLE_KINDS, DEFAULT_TASKS } from "../lib/db.js";
+import { db, ensureSchema, nowIso, CURRENCIES, VEHICLE_KINDS, SERVICE_KINDS, DEFAULT_TASKS } from "../lib/db.js";
 import { today } from "../lib/day.js";
 import { readJson, clean, parseId, parseDay, parseDataJpeg } from "../lib/http.js";
 import { currentUser, isAdmin, deny, notYours } from "../lib/auth.js";
@@ -69,9 +75,10 @@ const rowToTask = (t) => ({
   everyMonths: t.everyMonths == null ? null : Number(t.everyMonths),
   note: t.note, active: Number(t.active),
 });
-const rowToService = (s) => ({
+const rowToService = (s, taskIds = []) => ({
   id: Number(s.id), vehicleId: Number(s.vehicleId),
-  taskId: s.taskId == null ? null : Number(s.taskId),
+  kind: s.kind === "accessory" ? "accessory" : "service",
+  taskIds,
   expenseId: s.expenseId == null ? null : Number(s.expenseId),
   day: s.day, odometer: s.odometer == null ? null : Number(s.odometer),
   title: s.title, cost: s.cost == null ? null : Number(s.cost), currency: s.currency,
@@ -115,6 +122,43 @@ async function mineService(user, id) {
   return s ? { id: Number(s.id), vehicleId: Number(s.vehicleId), expenseId: s.expenseId == null ? null : Number(s.expenseId) } : null;
 }
 
+// Las tareas que cubre cada servicio, en un Map serviceId -> [taskId].
+async function taskMap(accountId, serviceId = null) {
+  const rs = await db.execute({
+    sql: `SELECT st.serviceId, st.taskId FROM service_tasks st
+            JOIN services s ON s.id = st.serviceId
+            JOIN vehicles v ON v.id = s.vehicleId
+           WHERE v.accountId = ? ${serviceId ? "AND st.serviceId = ?" : ""}`,
+    args: serviceId ? [accountId, serviceId] : [accountId],
+  });
+  const m = new Map();
+  for (const r of rs.rows) {
+    const k = Number(r.serviceId);
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(Number(r.taskId));
+  }
+  return m;
+}
+
+// Deja el servicio cubriendo EXACTAMENTE esas tareas, y solo las del mismo
+// vehiculo (asi no se marca como hecha una tarea del carro con un servicio de
+// la moto). Devuelve las que quedaron.
+async function setServiceTasks(serviceId, vehicleId, taskIds) {
+  await db.execute({ sql: `DELETE FROM service_tasks WHERE serviceId = ?`, args: [serviceId] });
+  const ids = [...new Set((taskIds || []).map(parseId).filter(Boolean))];
+  if (!ids.length) return [];
+  const rs = await db.execute({
+    sql: `SELECT id FROM vehicle_tasks WHERE vehicleId = ? AND id IN (${ids.map(() => "?").join(",")})`,
+    args: [vehicleId, ...ids],
+  });
+  if (!rs.rows.length) return [];
+  await db.batch(rs.rows.map((r) => ({
+    sql: `INSERT OR IGNORE INTO service_tasks (serviceId, taskId) VALUES (?, ?)`,
+    args: [serviceId, Number(r.id)],
+  })), "write");
+  return rs.rows.map((r) => Number(r.id));
+}
+
 async function checkCategory(user, v) {
   if (v === null || v === undefined || v === "") return { ok: true, value: null };
   const id = parseId(v);
@@ -156,11 +200,12 @@ export default async function handler(req, res) {
                WHERE v.accountId = ? ORDER BY s.day DESC, s.id DESC`,
         args: [me.accountId],
       });
+      const tm = await taskMap(me.accountId);
       return res.status(200).json({
         today: today(),
         vehicles: veh.rows.map(rowToVehicle),
         tasks: tasks.rows.map(rowToTask),
-        services: srv.rows.map(rowToService),
+        services: srv.rows.map((x) => rowToService(x, tm.get(Number(x.id)) || [])),
       });
     }
 
@@ -222,8 +267,10 @@ export default async function handler(req, res) {
       if (req.query?.hard) {
         // Los servicios NO se borran: quedan sin tarea. Se hizo el trabajo y se
         // pago; perderlo del historial seria perder el kilometraje.
+        // Los servicios NO se borran: dejan de cubrir esta tarea y ya. Se hizo
+        // el trabajo y se pago; perderlo seria perder el kilometraje.
         await db.batch([
-          { sql: `UPDATE services SET taskId = NULL WHERE taskId = ?`, args: [id] },
+          { sql: `DELETE FROM service_tasks WHERE taskId = ?`, args: [id] },
           { sql: `DELETE FROM vehicle_tasks WHERE id = ?`, args: [id] },
         ], "write");
         return res.status(200).json({ ok: true, deleted: true });
@@ -247,11 +294,9 @@ export default async function handler(req, res) {
       const currency = CURRENCIES.includes(body.currency) ? body.currency : "NIO";
       const receipt = parseDataJpeg(body.receipt, MAX_RECEIPT, "La factura");
       if (!receipt.ok) return res.status(400).json({ error: receipt.error });
-      let taskId = null;
-      if (body.taskId) {
-        taskId = parseId(body.taskId);
-        if (!taskId || !(await mineTask(me, taskId))) return res.status(400).json({ error: "Esa tarea no existe." });
-      }
+      const kind = SERVICE_KINDS.includes(body.kind) ? body.kind : "service";
+      // Un accesorio no cubre tareas: no es algo que haya que repetir.
+      const pedidas = kind === "accessory" ? [] : (Array.isArray(body.taskIds) ? body.taskIds : []);
       const cat = await checkCategory(me, body.categoryId);
       if (!cat.ok) return res.status(400).json({ error: "Esa categoría de gasto no existe." });
 
@@ -268,17 +313,18 @@ export default async function handler(req, res) {
         expenseId = Number(ge.lastInsertRowid);
       }
       const ins = await db.execute({
-        sql: `INSERT INTO services (vehicleId, taskId, expenseId, day, odometer, title, cost, currency, place, note, hasReceipt, createdBy, createdAt, updatedAt)
+        sql: `INSERT INTO services (vehicleId, kind, expenseId, day, odometer, title, cost, currency, place, note, hasReceipt, createdBy, createdAt, updatedAt)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        args: [vehicleId, taskId, expenseId, day, odo.value, title, cost.value, currency,
+        args: [vehicleId, kind, expenseId, day, odo.value, title, cost.value, currency,
                clean(body.place, 120), clean(body.note, 500), receipt.value ? 1 : 0, me.id, now, now],
       });
       const id = Number(ins.lastInsertRowid);
+      const puestas = await setServiceTasks(id, vehicleId, pedidas);
       if (receipt.value) {
         await db.execute({ sql: `INSERT INTO service_receipts (serviceId, image, uploadedAt) VALUES (?, ?, ?)`, args: [id, receipt.value, now] });
       }
       const rs = await db.execute({ sql: `${SRV_SELECT} WHERE s.id = ?`, args: [id] });
-      return res.status(201).json({ service: rowToService(rs.rows[0]) });
+      return res.status(201).json({ service: rowToService(rs.rows[0], puestas) });
     }
 
     /* ----------------------------------------------------- PUT ?service= --- */
@@ -288,6 +334,10 @@ export default async function handler(req, res) {
       const mio = await mineService(me, id);
       if (!mio) return notYours(res);
       const sets = [], args = [];
+      // Cambiar SOLO las tareas que cubre es un cambio valido, y no toca
+      // ninguna columna de `services`: se marca aparte para no responder
+      // "nada que actualizar" cuando si habia algo.
+      let tocado = false;
       if ("day" in body) {
         const day = parseDay(body.day);
         if (!day) return res.status(400).json({ error: "La fecha no es válida." });
@@ -312,13 +362,15 @@ export default async function handler(req, res) {
         if (!CURRENCIES.includes(body.currency)) return res.status(400).json({ error: "Moneda inválida." });
         sets.push("currency = ?"); args.push(body.currency);
       }
-      if ("taskId" in body) {
-        let taskId = null;
-        if (body.taskId) {
-          taskId = parseId(body.taskId);
-          if (!taskId || !(await mineTask(me, taskId))) return res.status(400).json({ error: "Esa tarea no existe." });
-        }
-        sets.push("taskId = ?"); args.push(taskId);
+      if ("kind" in body) {
+        if (!SERVICE_KINDS.includes(body.kind)) return res.status(400).json({ error: "Tipo de registro invalido." });
+        sets.push("kind = ?"); args.push(body.kind);
+        // Si pasa a ser accesorio, deja de cubrir tareas.
+        if (body.kind === "accessory") { await setServiceTasks(id, mio.vehicleId, []); tocado = true; }
+      }
+      if ("taskIds" in body && body.kind !== "accessory") {
+        await setServiceTasks(id, mio.vehicleId, Array.isArray(body.taskIds) ? body.taskIds : []);
+        tocado = true;
       }
       if ("place" in body) { sets.push("place = ?"); args.push(clean(body.place, 120)); }
       if ("note" in body) { sets.push("note = ?"); args.push(clean(body.note, 500)); }
@@ -336,10 +388,12 @@ export default async function handler(req, res) {
         }
         sets.push("hasReceipt = ?"); args.push(receipt.value ? 1 : 0);
       }
-      if (!sets.length) return res.status(400).json({ error: "Nada que actualizar." });
-      sets.push("updatedAt = ?"); args.push(nowIso());
-      args.push(id);
-      await db.execute({ sql: `UPDATE services SET ${sets.join(", ")} WHERE id = ?`, args });
+      if (!sets.length && !tocado) return res.status(400).json({ error: "Nada que actualizar." });
+      if (sets.length || tocado) {
+        sets.push("updatedAt = ?"); args.push(nowIso());
+        args.push(id);
+        await db.execute({ sql: `UPDATE services SET ${sets.join(", ")} WHERE id = ?`, args });
+      }
 
       // Si este servicio tiene un gasto en el hogar, se mueve con el: si no, la
       // plata del mes diria una cosa y el taller otra.
@@ -358,7 +412,8 @@ export default async function handler(req, res) {
         }
       }
       const rs = await db.execute({ sql: `${SRV_SELECT} WHERE s.id = ?`, args: [id] });
-      return res.status(200).json({ ok: true, service: rowToService(rs.rows[0]) });
+      const tm2 = await taskMap(me.accountId, id);
+      return res.status(200).json({ ok: true, service: rowToService(rs.rows[0], tm2.get(id) || []) });
     }
 
     /* -------------------------------------------------- DELETE ?service= --- */
@@ -368,6 +423,7 @@ export default async function handler(req, res) {
       const mio = await mineService(me, id);
       if (!mio) return notYours(res);
       const ops = [
+        { sql: `DELETE FROM service_tasks WHERE serviceId = ?`, args: [id] },
         { sql: `DELETE FROM service_receipts WHERE serviceId = ?`, args: [id] },
         { sql: `DELETE FROM services WHERE id = ?`, args: [id] },
       ];
@@ -439,6 +495,7 @@ export default async function handler(req, res) {
         await db.batch([
           // Los gastos del hogar que nacieron de sus servicios tambien se van.
           { sql: `DELETE FROM expenses WHERE id IN (SELECT expenseId FROM services WHERE vehicleId = ? AND expenseId IS NOT NULL)`, args: [id] },
+          { sql: `DELETE FROM service_tasks WHERE serviceId IN (SELECT id FROM services WHERE vehicleId = ?)`, args: [id] },
           { sql: `DELETE FROM service_receipts WHERE serviceId IN (SELECT id FROM services WHERE vehicleId = ?)`, args: [id] },
           { sql: `DELETE FROM services WHERE vehicleId = ?`, args: [id] },
           { sql: `DELETE FROM vehicle_tasks WHERE vehicleId = ?`, args: [id] },

@@ -152,19 +152,23 @@ const VEH = r.body.vehicle.id;
 const TAREA = {};
 for (const t of r.body.tasks) TAREA[t.name] = t.id;
 
-for (const [tarea, mes, km, titulo, costo, lugar] of [
-  ["Cambio de aceite", 8, 8000, "Cambio de aceite y filtro", 1200, "Taller de don Luis"],
-  ["Frenos (pastillas)", 6, 9500, "Pastillas delanteras", 900, "Taller de don Luis"],
-  ["Cambio de aceite", 4, 11000, "Cambio de aceite", 1250, "Taller de don Luis"],
-  ["Llantas", 2, 12800, "Llanta trasera nueva", 3400, "Llantera El Rayo"],
-  ["Seguro", 1, 13200, "Seguro anual", 4800, null],
-  [null, 0, 13800, "Lavado y engrase", 250, null],
+// En la casa comercial le hacen el mantenimiento completo y se paga UN monto:
+// un registro que marca de una vez todo lo que cubrio.
+for (const [tareas, mes, km, titulo, costo, lugar, tipo] of [
+  [["Cambio de aceite", "Filtro de aire"], 8, 8000, "Mantenimiento completo", 2200, "Casa comercial"],
+  [["Frenos (pastillas)"], 6, 9500, "Pastillas delanteras", 900, "Taller de don Luis"],
+  [["Cambio de aceite", "Filtro de aire", "Cadena y sprockets"], 4, 11000, "Mantenimiento completo", 3100, "Casa comercial"],
+  [[], 3, 11500, "Antivuelco", 2800, "Casa Pellas", "accessory"],
+  [[], 3, 11600, "Pescantes", 1500, "Casa Pellas", "accessory"],
+  [["Llantas"], 2, 12800, "Llanta trasera nueva", 3400, "Llantera El Rayo"],
+  [["Seguro"], 1, 13200, "Seguro anual", 4800, null],
+  [[], 0, 13800, "Lavado y engrase", 250, null],
 ]) {
   r = await call(vehicles, { method: "POST", query: { service: "1" }, token: A, body: {
-    vehicleId: VEH, taskId: tarea ? TAREA[tarea] : null, day: dia(mes, 12), odometer: km,
-    title: titulo, cost: costo, currency: "NIO", place: lugar,
-    // Los dos ultimos se anotan tambien como gasto del hogar, para que se vea
-    // que la plata figura una sola vez.
+    vehicleId: VEH, kind: tipo || "service", taskIds: tareas.map((t) => TAREA[t]),
+    day: dia(mes, 12), odometer: km, title: titulo, cost: costo, currency: "NIO", place: lugar,
+    // Los ultimos se anotan tambien como gasto del hogar, para que se vea que
+    // la plata figura una sola vez.
     categoryId: mes <= 1 ? CAT.Transporte : null,
   } });
   if (r.status !== 201) console.error("servicio fallo", r.body);
