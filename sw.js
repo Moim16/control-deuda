@@ -6,7 +6,7 @@
 
 // Se sube la version cuando cambia algo del cascaron (el icono, por ejemplo):
 // si no, el service worker sigue sirviendo el archivo viejo del cache.
-const CACHE = "deudas-v2";
+const CACHE = "deudas-v3";
 const SHELL = [
   "/", "/index.html", "/manifest.webmanifest",
   "/icon.svg", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png",
@@ -38,5 +38,43 @@ self.addEventListener("fetch", (e) => {
         return res;
       })
       .catch(() => caches.match(e.request).then((r) => r || caches.match("/index.html")))
+  );
+});
+
+/* ============================================================ avisos push ===
+   Los manda el motor de /api/push?cron=1. El payload trae { title, body, url }.
+   Sin service worker no hay push: el navegador entrega aqui aunque la pestaña
+   este cerrada, y por eso esto vive en este archivo y no en index.html.
+-------------------------------------------------------------------------- */
+self.addEventListener("push", (e) => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch { /* payload raro: titulo por defecto */ }
+  e.waitUntil(self.registration.showNotification(data.title || "Deudas", {
+    body:  data.body || "",
+    icon:  "/icon-192.png",
+    badge: "/icon-192.png",
+    // La misma etiqueta reemplaza el aviso anterior de esa deuda en vez de
+    // apilar cinco iguales.
+    tag:   data.tag || "deudas",
+    renotify: true,
+    lang: "es",
+    data: { url: data.url || "/" },
+  }));
+});
+
+// Al tocarlo: enfoca la pestaña que ya este abierta, o abre la app.
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || "/";
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if (c.url.includes(location.origin) && "focus" in c) {
+          c.navigate(url).catch(() => {});
+          return c.focus();
+        }
+      }
+      return self.clients.openWindow(url);
+    })
   );
 });

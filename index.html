@@ -794,6 +794,7 @@ const ICONS = {
   download:  '<path d="M12 3v12M7.5 10.5L12 15l4.5-4.5M4 20h16"/>',
   whatsapp:  '<path d="M3.5 20.5l1.3-4.6a8.2 8.2 0 1 1 3.1 3l-4.4 1.6z"/><path d="M9 9.2c.2 1 .7 2 1.5 2.8s1.8 1.3 2.8 1.5l.9-1.2 1.9.8c-.2 1-1.1 1.6-2.1 1.5a7.4 7.4 0 0 1-6.1-6.1c-.1-1 .5-1.9 1.5-2.1l.8 1.9-1.2.9z"/>',
   shield:    '<path d="M12 2.8l7.5 2.9v5.5c0 4.4-3.1 8.4-7.5 9.5-4.4-1.1-7.5-5.1-7.5-9.5V5.7z"/><path d="M9 11.9l2.2 2.2 4.3-4.3"/>',
+  bell:      '<path d="M18 8.5a6 6 0 1 0-12 0c0 4.5-1.5 6-2.5 7h17c-1-1-2.5-2.5-2.5-7z"/><path d="M10 19.5a2.2 2.2 0 0 0 4 0"/>',
   chart:     '<path d="M4 20V10.5M10 20V4M16 20v-6.5M22 20H2"/>',
   list:      '<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
   percent:   '<path d="M19 5L5 19"/><circle cx="7" cy="7" r="2.3"/><circle cx="17" cy="17" r="2.3"/>',
@@ -1042,6 +1043,9 @@ async function start() {
   if (!isAdmin() && S.view === "spend") S.view = "home";
   await refresh();
   setView(S.view);
+  // Si este dispositivo ya tenia los avisos activados, se refleja en Ajustes.
+  // No bloquea el arranque: si falla, la app entra igual y sin avisos.
+  cargarPush().then(() => { if (S.view === "settings") renderSettings(); }).catch(() => {});
 }
 
 // Vuelve a pedir el resumen (deudas, movimientos, comentarios). Es la unica
@@ -3185,6 +3189,11 @@ function renderSettings() {
         ${item("cats", "tag", "Categorías y presupuesto", `<span class="muted">${(S.spend?.categories || []).filter((c) => c.active).length || ""}</span>`)}
       </div>` : ""}
 
+    <h3>Avisos</h3>
+    <div class="card">
+      ${item("push", "bell", "Avisarme en el teléfono", `<span class="badge ${S.push?.on ? "admin" : "off"}">${S.push?.on ? "activados" : "apagados"}</span>`)}
+    </div>
+
     ${yaInstalada() ? "" : `<h3>Aplicación</h3><div class="card">${item("instalar", "install", "Instalar en el teléfono", promptInstalar ? '<span class="badge admin">listo</span>' : "")}</div>`}
 
     <h3>Cuenta</h3>
@@ -3195,11 +3204,97 @@ function renderSettings() {
     </div>`;
   $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("[data-theme]"); if (!b) return; applyTheme(b.dataset.theme); renderSettings(); });
   $("settingsBody").querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => ({
-    acc: accountNameScreen, debts: debtsScreen, users: usersScreen,
+    acc: accountNameScreen, debts: debtsScreen, users: usersScreen, push: avisosScreen,
     cats: categoriesScreen, incomes: incomesScreen, vehs: () => setView("veh"), instalar: instalarApp,
     pw: passwordScreen, rec: recoveryScreen,
     out: async () => { if (await ask({ title: "¿Cerrar sesión?", ok: "Cerrar sesión", danger: true })) logout(); },
   }[b.dataset.act]())));
+}
+
+/* ------------------------------ avisos push ------------------------------
+   Web Push: el navegador entrega el aviso aunque la app este cerrada. No hace
+   falta Firebase — las llaves VAPID viven en el servidor.
+
+   Solo funciona en HTTPS y con service worker, y en iPhone unicamente si la
+   app esta INSTALADA en la pantalla de inicio. Eso ultimo hay que decirlo:
+   si no, el boton no hace nada y no se sabe por que.
+-------------------------------------------------------------------------- */
+const pushSoportado = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+// La llave publica viaja en base64url y `applicationServerKey` la quiere en bytes.
+function urlBase64ToUint8Array(base64) {
+  const pad = "=".repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+// Mira si este dispositivo ya esta suscrito. Se llama al entrar.
+async function cargarPush() {
+  S.push = { on: false, listo: false };
+  if (!pushSoportado()) return;
+  try {
+    const cfg = await api("/api/push");
+    S.push.listo = !!cfg.enabled;
+    S.push.key = cfg.publicKey;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    S.push.on = !!sub && Notification.permission === "granted";
+  } catch { /* sin avisos configurados: se queda apagado */ }
+}
+
+async function activarPush() {
+  const reg = await navigator.serviceWorker.ready;
+  const permiso = await Notification.requestPermission();
+  if (permiso !== "granted") throw new Error("El navegador no dio permiso para los avisos.");
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(S.push.key),
+  });
+  await api("/api/push", { method: "POST", body: { subscription: sub.toJSON() } });
+  S.push.on = true;
+}
+
+async function apagarPush() {
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub) {
+    await api("/api/push", { method: "DELETE", body: { endpoint: sub.endpoint } }).catch(() => {});
+    await sub.unsubscribe();
+  }
+  S.push.on = false;
+}
+
+function avisosScreen() {
+  const soporta = pushSoportado();
+  const bloqueado = soporta && Notification.permission === "denied";
+  openModal(`
+    <h2>Avisarme en el teléfono</h2>
+    <p class="muted" style="margin:-6px 0 14px;">Cuando se acerque un pago acordado, cuando uno se pase de fecha, cuando al vehículo le toque algo, y cuando alguien escriba un comentario.</p>
+    ${!soporta ? `<div class="msg warn">Este navegador no puede enviar avisos.${esIOS() ? " En iPhone hay que <b>instalar la app</b> en la pantalla de inicio primero." : ""}</div>`
+      : !S.push?.listo ? `<div class="msg warn">El servidor todavía no tiene configuradas las llaves de avisos.</div>`
+      : bloqueado ? `<div class="msg err">Los avisos están <b>bloqueados</b> para este sitio. Se permiten desde el candado de la barra de direcciones.</div>`
+      : `<div class="card pad">
+           <label class="row" style="gap:10px; cursor:pointer;">
+             <input type="checkbox" id="pOn" ${S.push.on ? "checked" : ""} style="width:20px; height:20px;">
+             <span class="grow">Avisos activados en este dispositivo</span>
+           </label>
+           <p class="muted" style="margin:10px 0 0;">Se activan por dispositivo: si entras desde el teléfono y la computadora, hay que activarlos en cada uno.</p>
+         </div>`}
+    <div id="pMsg"></div>`);
+
+  $("pOn")?.addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    e.target.disabled = true;
+    try {
+      if (on) await activarPush(); else await apagarPush();
+      toast(on ? "Avisos activados" : "Avisos apagados");
+      closeModal(); renderSettings();
+    } catch (err) {
+      e.target.checked = !on;
+      showErr("pMsg", err);
+    } finally { e.target.disabled = false; }
+  });
 }
 
 function accountNameScreen() {

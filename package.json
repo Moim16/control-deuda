@@ -11,6 +11,7 @@
     "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
-    "@libsql/client": "^0.17.4"
+    "@libsql/client": "^0.17.4",
+    "web-push": "^3.6.7"
   }
 }

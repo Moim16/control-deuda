@@ -19,6 +19,8 @@ import categories from "../api/categories.js";
 import expenses from "../api/expenses.js";
 import incomes from "../api/incomes.js";
 import vehicles from "../api/vehicles.js";
+import push from "../api/push.js";
+import { proximoPago, tareaVencida, shiftMonths, textoPago } from "../lib/avisos.js";
 import { db, ensureSchema } from "../lib/db.js";
 
 let fails = 0, total = 0;
@@ -638,6 +640,79 @@ check("borrado definitivo", r.status === 200 && r.body.deleted === true);
 const huerfanos = Number((await db.execute({ sql: `SELECT COUNT(*) c FROM entries WHERE debtId = ?`, args: [D2] })).rows[0].c);
 check("sin movimientos huerfanos", huerfanos === 0);
 
+/* =============================================================== avisos == */
+section("avisos push");
+
+// --- las reglas, sin tocar la red ---
+const deudaConPlan = (extra = {}) => ({
+  id: 1, name: "Mi hermano", currency: "NIO", active: 1,
+  dueEvery: "monthly", dueAmount: 1000, dueFrom: "2026-09-15",
+  totals: { NIO: { loaned: 5000, paid: 1500, balance: 3500 } },
+  ...extra,
+});
+
+let due = proximoPago(deudaConPlan(), "2026-09-03");
+check("proximo pago: faltan 12 dias", due && due.day === "2026-09-15" && due.dias === 12, j(due));
+
+due = proximoPago(deudaConPlan({ dueFrom: "2026-07-15" }), "2026-09-03");
+check("quien nunca pago ve el ATRASO, no la fecha que viene", due.vencido && due.dias < 0, j(due));
+
+due = proximoPago(deudaConPlan({ dueFrom: "2026-06-15", lastPaymentDay: "2026-08-20" }), "2026-09-03");
+check("quien ya pago ve la fecha siguiente a su pago", due.day === "2026-09-15", j(due));
+
+check("una deuda sin acuerdo no avisa", proximoPago({ ...deudaConPlan(), dueEvery: null }) === null);
+check("una deuda cerrada no avisa", proximoPago(deudaConPlan({ active: 0 })) === null);
+check("una deuda saldada no avisa",
+  proximoPago(deudaConPlan({ totals: { NIO: { loaned: 5000, paid: 5000, balance: 0 } } })) === null);
+
+check("el dia 31 cae en el ultimo dia de los meses cortos", shiftMonths("2026-01-31", 1) === "2026-02-28");
+check("y vuelve a 31 cuando el mes lo tiene", shiftMonths("2026-01-31", 2) === "2026-03-31");
+
+// El mismo pago se cuenta al reves segun quien lo lea.
+due = proximoPago(deudaConPlan({ dueFrom: "2026-07-15" }), "2026-09-03");
+check("al que debe se le dice 'pago atrasado'", textoPago(deudaConPlan(), due, false).title.includes("atrasado"));
+check("al que cobra se le dice 'te debe'", textoPago(deudaConPlan(), due, true).title.includes("te debe"));
+
+const tareaMeses = { id: 7, name: "Aceite", everyMonths: 6 };
+const servs = [{ id: 1, vehicleId: 1, day: "2025-06-03", taskIds: [7] }];
+check("tarea vencida por fecha", tareaVencida(tareaMeses, servs, "2026-09-03").vencido === true);
+check("tarea al dia", tareaVencida(tareaMeses, [{ id: 2, vehicleId: 1, day: "2026-08-01", taskIds: [7] }], "2026-09-03").vencido === false);
+check("tarea que nunca se hizo no tiene fecha que avisar", tareaVencida(tareaMeses, [], "2026-09-03") === null);
+check("lo que solo va por km no se programa", tareaVencida({ id: 8, name: "Llantas", everyMonths: null }, servs, "2026-09-03") === null);
+
+// --- el endpoint ---
+r = await call(push, { method: "GET" });
+check("la config de push responde", r.status === 200 && "enabled" in r.body, j(r.body));
+
+r = await call(push, { method: "POST", body: { subscription: { endpoint: "https://x/1", keys: { p256dh: "a", auth: "b" } } } });
+check("sin sesion no se puede suscribir (401)", r.status === 401);
+
+r = await call(push, {
+  method: "POST", token: A.token,
+  body: { subscription: { endpoint: "https://x/1", keys: { p256dh: "a", auth: "b" } } },
+});
+check("suscribir un dispositivo", r.status === 201, j(r.body));
+
+r = await call(push, { method: "POST", token: A.token, body: { subscription: { endpoint: "https://x/1", keys: { p256dh: "z", auth: "z" } } } });
+const subs1 = Number((await db.execute("SELECT COUNT(*) c FROM push_subs")).rows[0].c);
+check("re-suscribirse NO duplica la fila", subs1 === 1, `hay ${subs1}`);
+
+r = await call(push, { method: "POST", token: A.token, body: { subscription: { endpoint: "no-sirve" } } });
+check("una suscripcion sin llaves se rechaza (400)", r.status === 400);
+
+r = await call(push, { method: "DELETE", token: V.token, body: { endpoint: "https://x/1" } });
+const subs2 = Number((await db.execute("SELECT COUNT(*) c FROM push_subs")).rows[0].c);
+check("otro usuario no puede borrar mi dispositivo", subs2 === 1, `quedan ${subs2}`);
+
+r = await call(push, { method: "DELETE", token: A.token, body: { endpoint: "https://x/1" } });
+const subs3 = Number((await db.execute("SELECT COUNT(*) c FROM push_subs")).rows[0].c);
+check("desuscribirse borra la fila", r.status === 200 && subs3 === 0);
+
+// El motor sin VAPID no revienta: lo dice y sigue.
+r = await call(push, { method: "GET", query: { cron: "1" } });
+check("el motor sin VAPID lo dice en vez de fallar",
+  r.status === 200 && (r.body.ok === false || r.body.ok === true), j(r.body));
+
 /* ========================================================================== */
 console.log(`\n${total - fails}/${total} pruebas pasaron${fails ? `  (${fails} FALLARON)` : ""}.`);
 
@@ -649,6 +724,7 @@ if (process.argv.includes("--keep")) {
     "DELETE FROM debt_users", "DELETE FROM debts",
     "DELETE FROM expense_receipts", "DELETE FROM expenses", "DELETE FROM categories", "DELETE FROM incomes",
     "DELETE FROM service_tasks", "DELETE FROM service_receipts", "DELETE FROM services", "DELETE FROM vehicle_tasks", "DELETE FROM vehicles",
+    "DELETE FROM push_subs", "DELETE FROM push_state",
     "DELETE FROM users", "DELETE FROM accounts",
   ], "write");
   console.log("Datos de prueba borrados.");

@@ -262,6 +262,34 @@ Las pruebas cubren, entre otras cosas, que una cuenta no vea ni toque nada de ot
 4. Deploy → abrir la URL → **Crear mi cuenta** → guardar el código de recuperación → crear la primera deuda.
 5. *Ajustes → Usuarios con acceso* → dar acceso al hermano marcando su deuda.
 
+### Avisos en el teléfono (opcional)
+
+Web Push, sin Firebase ni cuentas de Google: las llaves VAPID son del propio servidor.
+
+1. **Generar el par de llaves**, una sola vez:
+
+   ```bash
+   node -e "console.log(require('web-push').generateVAPIDKeys())"
+   ```
+
+2. **En Vercel → Environment Variables**: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (un `mailto:` tuyo) y `CRON_SECRET` (cualquier cadena larga).
+
+3. **Un cron externo** — [cron-job.org](https://cron-job.org) es gratis — pegando a:
+
+   ```
+   https://<tu-app>.vercel.app/api/push?cron=1&token=<CRON_SECRET>
+   ```
+
+   Cada 5 minutos si quieres los comentarios casi al instante; una vez al día basta para los pagos y el mantenimiento, que salen una sola vez al día por diseño.
+
+4. En la app: *Ajustes → Avisarme en el teléfono*. Se activa **por dispositivo**.
+
+Sin las llaves, todo sigue funcionando: el endpoint responde `enabled:false` y la pantalla de avisos lo dice, en vez de fallar.
+
+**Qué avisa.** El pago acordado tres días antes, el mismo día y cuando se pasa; la tarea del vehículo que ya toca por fecha; y el comentario que escribe otra persona. Lo que toca por kilómetros no se avisa: no tiene fecha — depende de cuánto se ande — así que ponerle una sería adivinar, y eso se ve al abrir la app.
+
+**Por qué así y no de otra forma.** Las reglas están en `lib/avisos.js`, separadas del envío, para poder probarlas sin mandar un push de verdad. Y son las MISMAS que usa la app nativa para sus recordatorios locales (`domain/avisos.dart`): si un día cambia el criterio, hay que cambiarlo en los dos.
+
 ---
 
 ## Convenciones
