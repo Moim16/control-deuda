@@ -1881,7 +1881,10 @@ function simulate({ balance, amount, freq, start, rate }) {
     // Si con el pago el saldo no bajo respecto al periodo anterior, no termina nunca.
     if (n >= 2 && rows[n - 1].balance >= rows[n - 2].balance - 0.005 && bal > 0) return { rows, never: true, interest, paid, n, end: null };
     prev = day;
-    day = f.months ? shiftMonths(day, f.months) : shiftDays(day, f.days);
+    // La siguiente fecha se cuenta SIEMPRE desde el arranque, no desde la
+    // anterior: sumando un mes a la anterior, un plan del 31 pasa por el 28 de
+    // febrero y se queda en el 28 para siempre. Es la misma regla que nextDue().
+    day = f.months ? shiftMonths(start, f.months * n) : shiftDays(start, f.days * n);
   }
   return { rows, never: bal > 0.005, interest, paid, n, end: rows.length ? rows[rows.length - 1].day : start };
 }
