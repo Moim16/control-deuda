@@ -15,47 +15,47 @@ import { join } from "node:path";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-const FONDO   = [0x18, 0x18, 0x1b];    // #18181b
-const BILLETE = [0xf4, 0xf4, 0xf5];    // #f4f4f5
+/* ------------------------------- geometria --------------------------------
+   Todo en el lienzo de 512x512 de icon.svg: una cartera.
 
-/* ------------------------------- geometria -------------------------------- */
-// Todo en el lienzo original de 512x512 de icon.svg.
+   Es EL MISMO dibujo que `tool/make_icons.mjs` de la app de Flutter, a
+   proposito: el icono de la app instalada desde la tienda y el de la
+   instalada desde el navegador tienen que ser el mismo icono.
+
+   Se probaron dos cosas antes: una flecha hacia abajo sobre un billete (a
+   tamaño de lanzador es el icono universal de DESCARGA) y tres monedas
+   apiladas de canto (es el de BASE DE DATOS). Una cartera no se confunde con
+   nada y ademas es el icono que la propia app usa para "Deuda".
+-------------------------------------------------------------------------- */
+const FONDO = [0x18, 0x18, 0x1b];    // --ink
+const CARTERA = [0xf4, 0xf4, 0xf5];  // --ink del tema oscuro
+
+const CUERPO = { x: 84, y: 156, w: 344, h: 216, r: 44 };
+const BOLSILLO = { x: 300, y: 222, w: 148, h: 84, r: 30 };
+const BROCHE = { cx: 368, cy: 264, r: 17 };
 
 const dist = (x, y, px, py) => Math.hypot(x - px, y - py);
 
-// Distancia de un punto a un segmento: sirve para trazos con punta redonda.
-function distSegmento(x, y, x1, y1, x2, y2) {
-  const dx = x2 - x1, dy = y2 - y1;
-  const largo = dx * dx + dy * dy;
-  let t = largo ? ((x - x1) * dx + (y - y1) * dy) / largo : 0;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy));
-}
-
-function enRectRedondeado(x, y, rx, ry, w, h, r) {
+function enRectRedondeado(x, y, { x: rx, y: ry, w, h, r }) {
   const cx = Math.max(rx + r, Math.min(x, rx + w - r));
   const cy = Math.max(ry + r, Math.min(y, ry + h - r));
-  return dist(x, y, cx, cy) <= r || (x >= rx && x <= rx + w && y >= ry + r && y <= ry + h - r)
+  return dist(x, y, cx, cy) <= r
+      || (x >= rx && x <= rx + w && y >= ry + r && y <= ry + h - r)
       || (y >= ry && y <= ry + h && x >= rx + r && x <= rx + w - r);
 }
 
 // Color del dibujo en un punto, o null si ahi no hay nada (fuera del icono).
 function colorEn(x, y, { sangre }) {
-  const hayFondo = sangre ? true : enRectRedondeado(x, y, 0, 0, 512, 512, 96);
-  if (!hayFondo) return null;
-
-  // Flecha hacia abajo (la deuda que baja), encima del circulo.
-  if (distSegmento(x, y, 256, 236, 256, 308) <= 9) return BILLETE;
-  if (distSegmento(x, y, 226, 280, 256, 310) <= 9) return BILLETE;
-  if (distSegmento(x, y, 286, 280, 256, 310) <= 9) return BILLETE;
-  // Circulo central y las dos "marcas" del billete.
-  if (dist(x, y, 256, 276) <= 52) return FONDO;
-  if (dist(x, y, 148, 228) <= 14) return FONDO;
-  if (dist(x, y, 364, 324) <= 14) return FONDO;
-  // El billete.
-  if (enRectRedondeado(x, y, 96, 176, 320, 200, 28)) return BILLETE;
-
-  return FONDO;
+  if (enRectRedondeado(x, y, CUERPO)) {
+    // El broche va encima del bolsillo, y el bolsillo encima del cuerpo.
+    if (dist(x, y, BROCHE.cx, BROCHE.cy) <= BROCHE.r) return CARTERA;
+    if (enRectRedondeado(x, y, BOLSILLO)) return FONDO;
+    return CARTERA;
+  }
+  const hayFondo = sangre
+    ? true
+    : enRectRedondeado(x, y, { x: 0, y: 0, w: 512, h: 512, r: 96 });
+  return hayFondo ? FONDO : null;
 }
 
 /* ------------------------------- rasterizado ------------------------------ */

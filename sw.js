@@ -4,7 +4,9 @@
 //  cachean: los saldos siempre salen del servidor.
 // =============================================================================
 
-const CACHE = "deudas-v1";
+// Se sube la version cuando cambia algo del cascaron (el icono, por ejemplo):
+// si no, el service worker sigue sirviendo el archivo viejo del cache.
+const CACHE = "deudas-v2";
 const SHELL = [
   "/", "/index.html", "/manifest.webmanifest",
   "/icon.svg", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png",
