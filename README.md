@@ -1,6 +1,6 @@
 # Deudas
 
-PWA personal para llevar **lo que debo y lo que me deben**: préstamos con su motivo y comprobante, abonos, saldo por cuenta y en total, gráficos, un simulador de "¿y si abono X cada tanto?", recordatorios de cuándo toca pagar (o cobrar) y acceso de **solo lectura** para la otra persona (mi hermano entra, ve su deuda y puede comentar, pero no toca nada).
+PWA personal para llevar **lo que debo, lo que me deben y en qué se me va la plata**: préstamos con su motivo y comprobante, abonos, saldo por cuenta y en total, gráficos, un simulador de "¿y si abono X cada tanto?", recordatorios de cuándo toca pagar (o cobrar) y acceso de **solo lectura** para la otra persona (mi hermano entra, ve su deuda y puede comentar, pero no toca nada).
 
 Mismo stack que `asistencia-obra`: un solo `index.html` sin frameworks, funciones serverless de Vercel y Turso/libSQL.
 
@@ -63,6 +63,27 @@ Cada movimiento lleva fecha, monto, motivo, una nota opcional y, si existe, el *
 
 En la lista, cada movimiento muestra el **saldo después de ese movimiento** en su moneda, así se ve la historia sin calcular nada.
 
+### Gastos del hogar
+
+La pestaña **Gastos** (solo del dueño) lleva el gasto del mes contra un presupuesto.
+
+- **Categorías** — las gavetas del gasto: Comida, Casa y servicios, Transporte… La primera vez la app ofrece crear las típicas de un tiro. Cada una puede llevar un **presupuesto mensual** con su moneda; el que no lo tenga simplemente no suma al tope.
+- **Anotar un gasto** — monto, moneda, fecha, categoría, en qué fue, nota y la **captura del recibo** (misma conversión a JPEG que los comprobantes).
+- **El mes manda.** Se elige un mes con las flechas y todo lo de abajo habla de ese mes.
+
+Arriba va lo único que uno quiere saber al abrir esto: **cuánto llevas y si te estás pasando**. La barra se pinta verde, ámbar o roja, y debajo dice *"Te quedan C$2,100 · C$150 por día"* o *"Te pasaste por C$1,400"*.
+
+> **El porcentaje del mes está al lado a propósito.** "Llevo el 60% del presupuesto" no dice nada por sí solo; "llevo el 60% y va el 30% del mes" sí. Por eso la app muestra los dos.
+
+Debajo, **en qué se fue**: una fila por categoría, ordenadas de mayor a menor, con su barra y su porcentaje (del presupuesto si lo tiene, del gasto del mes si no). Tocando una se abre su detalle con los últimos 6 meses, que es donde se ve si algo se disparó. Y al final, la lista del mes agrupada por día.
+
+El gráfico de barras muestra el gasto de los últimos 12 meses con **el presupuesto como una línea** sobre las mismas barras: la misma escala, un solo eje.
+
+Dos decisiones que importan:
+
+- **Borrar una categoría no borra sus gastos**: quedan como *"Sin categoría"* y siguen contando en los totales. La plata se gastó igual; quitarla del total sería mentir. Si solo quieres dejar de usarla, se archiva.
+- **El presupuesto es un tope que uno se propone, no una regla.** Pasarse no bloquea nada ni impide anotar: solo se pinta en rojo.
+
 ### Comentarios
 
 Lo único que puede escribir un usuario de solo lectura. Van sobre la deuda en general (*Comentarios*) o sobre un préstamo o abono concreto (abriendo el movimiento): "este abono fue el del sábado", "¿y los 500 del mes pasado?". Cada quien borra los suyos; el dueño, cualquiera. Los últimos aparecen en el Resumen.
@@ -73,6 +94,7 @@ Sin librerías (la CSP no permite scripts externos y en SVG cabe en 200 líneas)
 
 - **Resumen:** cómo ha ido el saldo en los últimos 12 meses, una línea por deuda (hasta 4) o el total.
 - **Deuda:** saldo al cierre de cada mes y préstamos vs. abonos por mes.
+- **Gastos:** gasto por mes con el presupuesto como línea de referencia, y por categoría.
 - **Simulador:** cómo bajaría el saldo con cada escenario.
 
 Cada gráfico tiene su tabla gemela (*Ver como tabla*) y tooltip al pasar el dedo. La paleta es la del método `dataviz` (validada para daltonismo en los dos temas): azul para préstamos/saldo, verde-aqua para abonos, naranja para el segundo escenario.
@@ -116,7 +138,7 @@ Sin build ni framework:
 - **Auth**: propia — scrypt (`salt:hash`) + `sessionToken` en el header `x-session-token`. Lockout de 5 intentos / 15 min
 - **Esquema**: se auto-crea con `ensureSchema()` (`CREATE TABLE IF NOT EXISTS` + `ALTER` idempotentes). No hay migraciones
 
-### Funciones serverless (5 de las 12 del plan Hobby)
+### Funciones serverless (7 de las 12 del plan Hobby)
 
 | Endpoint | Qué hace |
 |---|---|
@@ -125,6 +147,8 @@ Sin build ni framework:
 | `api/entries.js` | Préstamos y abonos, y el comprobante de cada uno |
 | `api/comments.js` | Comentarios sobre la deuda o sobre un movimiento |
 | `api/summary.js` | Todo lo que necesita el Resumen en una sola llamada |
+| `api/categories.js` | Categorías del gasto y su presupuesto mensual (solo dueño) |
+| `api/expenses.js` | Gastos del hogar y la captura de cada recibo (solo dueño) |
 
 ### Tablas
 
@@ -140,6 +164,9 @@ entries      préstamos y abonos: kind (loan / payment), currency (NIO / USD),
              day, amount, reason, note, hasReceipt
 receipts     el comprobante (data URI JPEG), misma clave que entries
 comments     comentarios; entryId NULL = sobre la deuda en general
+categories   gavetas del gasto del hogar + presupuesto mensual y su moneda
+expenses     un gasto por fila; categoryId NULL = sin categoría
+expense_receipts  la captura del recibo, misma idea que receipts
 ```
 
 Decisiones que importan:
@@ -163,9 +190,14 @@ node --env-file=.env scripts/dev.mjs    # igual, pero contra Turso
 `scripts/dev.mjs` sirve los estáticos y enruta `/api/<x>` a `api/<x>.js` igual que Vercel, con las mismas cabeceras de seguridad de `vercel.json`. Cachea los handlers: si tocas `api/` o `lib/`, reinícialo.
 
 ```bash
-node scripts/smoke.mjs        # 120 pruebas contra los handlers reales (base VACÍA); borra lo que crea
+node scripts/smoke.mjs        # 159 pruebas contra los handlers reales (base VACÍA); borra lo que crea
+node scripts/ui-check.mjs     # 36 comprobaciones de la interfaz, sin navegador
 node scripts/demo.mjs         # datos de muestra: moises / deuda1234 (dueño), hermano / deuda1234 (lectura)
 ```
+
+`ui-check.mjs` saca el `<script>` de `index.html`, lo corre en un DOM de mentira y llama a las funciones que pintan cada pantalla con datos inventados. No comprueba cómo se ve — para eso hay que abrirlo — sino que se pinta sin reventar, que **el texto es el correcto para quien mira** (el dueño ve *"Debo"*, el de solo lectura ve *"Me deben"*) y que las cuentas dan (saldo corrido por moneda, presupuesto, próximo pago, simulador, ejes de los gráficos).
+
+> Nació de un rato peleando con el navegador: media hora de clicks para descubrir un nombre de variable mal escrito es una mala inversión. Corre en dos segundos.
 
 Las pruebas cubren, entre otras cosas, que una cuenta no vea ni toque nada de otra, que un viewer vea solo lo asignado y no pueda escribir salvo comentarios, que los saldos por moneda no se mezclen, que el comprobante viaje aparte y solo en JPEG, que borrar un movimiento se lleve sus comentarios, que el código de recuperación sirva una sola vez, que un cobro lleve sus totales igual que una deuda, con el acuerdo de pago validado completo y la dirección cambiable sin tocar el historial, y que a un viewer no le lleguen los cobros ni el acuerdo de pago ni aunque se le asignen por error.
 

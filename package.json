@@ -3,10 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Control de deudas personales: prestamos, abonos, comprobantes y simulador de pago (Vercel + Turso/libSQL)",
+  "description": "Deudas, cobros y gastos del hogar: prestamos, abonos, comprobantes, presupuesto y simulador (Vercel + Turso/libSQL)",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "test": "node scripts/smoke.mjs",
+    "test": "node scripts/smoke.mjs && node scripts/ui-check.mjs",
+    "test:ui": "node scripts/ui-check.mjs",
     "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {

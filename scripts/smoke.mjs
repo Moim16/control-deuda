@@ -15,6 +15,8 @@ import debts from "../api/debts.js";
 import entries from "../api/entries.js";
 import comments from "../api/comments.js";
 import summary from "../api/summary.js";
+import categories from "../api/categories.js";
+import expenses from "../api/expenses.js";
 import { db, ensureSchema } from "../lib/db.js";
 
 let fails = 0, total = 0;
@@ -356,6 +358,89 @@ check("el viewer solo recibe lo suyo", r.body.debts.length === 1 && r.body.entri
 check("solo GET", (await call(summary, { method: "POST", token: A.token })).status === 405);
 
 /* ========================================================================== */
+section("Gastos del hogar: categorias");
+
+r = await call(categories, { token: A.token });
+check("una cuenta nueva no tiene categorias", r.status === 200 && r.body.categories.length === 0, j(r.body));
+r = await call(categories, { method: "POST", query: { seed: "1" }, token: A.token });
+check("seed crea las categorias tipicas", r.status === 201 && r.body.categories.length === 6 && r.body.categories.every((c) => c.budget === null), j(r.body.categories?.map((c) => c.name)));
+check("seed dos veces -> 409", (await call(categories, { method: "POST", query: { seed: "1" }, token: A.token })).status === 409);
+const CAT = {}; for (const c of r.body.categories) CAT[c.name] = c.id;
+
+r = await call(categories, { method: "POST", token: A.token, body: { name: "Mascotas", budget: "1,200.505", currency: "NIO" } });
+check("crear categoria con presupuesto (redondeado)", r.status === 201 && r.body.category.budget === 1200.51, j(r.body));
+CAT.Mascotas = r.body.category.id;
+check("nombre repetido -> 409", (await call(categories, { method: "POST", token: A.token, body: { name: "mascotas" } })).status === 409);
+check("sin nombre -> 400", (await call(categories, { method: "POST", token: A.token, body: { name: "  " } })).status === 400);
+check("presupuesto cero -> 400", (await call(categories, { method: "POST", token: A.token, body: { name: "X", budget: 0 } })).status === 400);
+check("el viewer no puede ni leer las categorias (403)", (await call(categories, { token: V.token })).status === 403);
+check("ni crearlas", (await call(categories, { method: "POST", token: V.token, body: { name: "Z" } })).status === 403);
+check("otra cuenta no puede editar mi categoria (404)",
+  (await call(categories, { method: "PUT", query: { id: String(CAT.Comida) }, token: B.token, body: { name: "hack" } })).status === 404);
+
+r = await call(categories, { method: "PUT", query: { id: String(CAT.Comida) }, token: A.token, body: { budget: 8000 } });
+check("ponerle presupuesto a una categoria", r.status === 200 && r.body.category.budget === 8000, j(r.body));
+r = await call(categories, { method: "PUT", query: { id: String(CAT.Salud) }, token: A.token, body: { budget: "" } });
+check("presupuesto vacio lo quita", r.body.category.budget === null);
+
+/* ========================================================================== */
+section("Gastos del hogar: gastos");
+
+const hoyISO = new Date().toISOString().slice(0, 10);
+r = await call(expenses, { method: "POST", token: A.token, body: { categoryId: CAT.Comida, day: hoyISO, amount: "1,500.50", reason: "Supermercado", receipt: JPEG } });
+check("anotar un gasto con captura", r.status === 201 && r.body.expense.amount === 1500.5 && r.body.expense.hasReceipt === true && r.body.expense.currency === "NIO", j(r.body));
+const X1 = r.body.expense.id;
+r = await call(expenses, { method: "POST", token: A.token, body: { day: hoyISO, amount: 300, reason: "No sé en qué", currency: "USD" } });
+check("gasto sin categoria y en USD", r.status === 201 && r.body.expense.categoryId === null && r.body.expense.currency === "USD", j(r.body));
+const X2 = r.body.expense.id;
+
+check("monto cero -> 400", (await call(expenses, { method: "POST", token: A.token, body: { day: hoyISO, amount: 0 } })).status === 400);
+check("fecha invalida -> 400", (await call(expenses, { method: "POST", token: A.token, body: { day: "2026-02-31", amount: 10 } })).status === 400);
+check("categoria de otra cuenta -> 400",
+  (await call(expenses, { method: "POST", token: B.token, body: { categoryId: CAT.Comida, day: hoyISO, amount: 10 } })).status === 400);
+check("captura PNG -> 400",
+  (await call(expenses, { method: "POST", token: A.token, body: { day: hoyISO, amount: 10, receipt: "data:image/png;base64,iVBORw0KGgo=" } })).status === 400);
+check("el viewer no ve los gastos (403)", (await call(expenses, { token: V.token })).status === 403);
+check("ni puede anotar (403)", (await call(expenses, { method: "POST", token: V.token, body: { day: hoyISO, amount: 10 } })).status === 403);
+
+r = await call(expenses, { token: A.token });
+check("GET trae categorias, gastos y hoy", r.status === 200 && r.body.categories.length === 7 && r.body.expenses.length === 2 && /^\d{4}-\d{2}-\d{2}$/.test(r.body.today), j({ c: r.body.categories?.length, e: r.body.expenses?.length }));
+check("la lista no arrastra la imagen, solo hasReceipt", !("image" in r.body.expenses[0]) && r.body.expenses.some((e) => e.hasReceipt));
+check("y dice quien lo anoto", r.body.expenses[0].createdBy === "moises");
+check("Comida ya cuenta un gasto", r.body.categories.find((c) => c.id === CAT.Comida).expenses === 1);
+
+r = await call(expenses, { query: { id: String(X1), receipt: "1" }, token: A.token });
+check("la captura se pide aparte", r.status === 200 && r.body.image === JPEG);
+check("un gasto sin captura -> 404", (await call(expenses, { query: { id: String(X2), receipt: "1" }, token: A.token })).status === 404);
+check("captura de otra cuenta -> 404", (await call(expenses, { query: { id: String(X1), receipt: "1" }, token: B.token })).status === 404);
+
+r = await call(expenses, { method: "PUT", query: { id: String(X1) }, token: A.token, body: { amount: 1600, categoryId: CAT.Transporte, receipt: null } });
+check("editar monto, categoria y quitar la captura",
+  r.status === 200 && r.body.expense.amount === 1600 && r.body.expense.categoryId === CAT.Transporte && r.body.expense.hasReceipt === false, j(r.body));
+check("...y la captura ya no esta", (await call(expenses, { query: { id: String(X1), receipt: "1" }, token: A.token })).status === 404);
+r = await call(expenses, { method: "PUT", query: { id: String(X1) }, token: A.token, body: { categoryId: "" } });
+check("se puede dejar sin categoria", r.body.expense.categoryId === null);
+check("moneda invalida al editar -> 400", (await call(expenses, { method: "PUT", query: { id: String(X1) }, token: A.token, body: { currency: "XXX" } })).status === 400);
+
+// Borrar una categoria NO borra sus gastos: la plata se gasto igual.
+await call(expenses, { method: "PUT", query: { id: String(X1) }, token: A.token, body: { categoryId: CAT.Mascotas } });
+r = await call(categories, { method: "DELETE", query: { id: String(CAT.Mascotas), hard: "1" }, token: A.token });
+check("borrar una categoria la elimina", r.status === 200 && r.body.deleted === true);
+r = await call(expenses, { token: A.token });
+check("y sus gastos quedan sin categoria, sin perderse",
+  r.body.expenses.length === 2 && r.body.expenses.find((e) => e.id === X1).categoryId === null, j(r.body.expenses.map((e) => e.categoryId)));
+r = await call(categories, { method: "DELETE", query: { id: String(CAT.Salud) }, token: A.token });
+check("archivar una categoria no la borra", r.status === 200);
+r = await call(categories, { token: A.token });
+check("y deja de salir en la lista normal", !r.body.categories.some((c) => c.id === CAT.Salud), j(r.body.categories.map((c) => c.name)));
+check("pero si con all=1", (await call(categories, { query: { all: "1" }, token: A.token })).body.categories.some((c) => c.id === CAT.Salud));
+
+check("borrar un gasto", (await call(expenses, { method: "DELETE", query: { id: String(X2) }, token: A.token })).status === 200);
+check("un gasto de otra cuenta -> 404", (await call(expenses, { method: "DELETE", query: { id: String(X1) }, token: B.token })).status === 404);
+r = await call(expenses, { token: A.token });
+check("queda un solo gasto", r.body.expenses.length === 1);
+
+/* ========================================================================== */
 section("Cerrar y borrar deudas");
 
 r = await call(debts, { method: "DELETE", query: { id: String(D3) }, token: A.token });
@@ -389,7 +474,9 @@ if (process.argv.includes("--keep")) {
 } else {
   await db.batch([
     "DELETE FROM receipts", "DELETE FROM comments", "DELETE FROM entries",
-    "DELETE FROM debt_users", "DELETE FROM debts", "DELETE FROM users", "DELETE FROM accounts",
+    "DELETE FROM debt_users", "DELETE FROM debts",
+    "DELETE FROM expense_receipts", "DELETE FROM expenses", "DELETE FROM categories",
+    "DELETE FROM users", "DELETE FROM accounts",
   ], "write");
   console.log("Datos de prueba borrados.");
 }

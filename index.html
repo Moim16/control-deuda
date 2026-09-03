@@ -349,6 +349,20 @@ details.plain[open] summary svg { transform:rotate(90deg); }
 .scen .x svg { width:15px; height:15px; }
 
 /* --------------------------------------------------------- ficha de usuario */
+/* --------------------------------------------------------------- gastos --
+   Fila de categoria: nombre, monto y una barra que compara con la categoria
+   mas alta del mes (o con su propio tope si lo tiene). */
+.cat-row {
+  display:block; width:100%; text-align:left; background:none; border:0; padding:11px 0;
+  color:inherit; border-bottom:1px solid var(--line);
+}
+.cat-row:first-child { padding-top:2px; }
+.cat-row:last-child { border-bottom:0; padding-bottom:2px; }
+.cat-row:hover .meter { border-color:var(--line-2); }
+.cat-row .meter { height:6px; border-radius:3px; background:var(--soft); border:1px solid var(--line); overflow:hidden; }
+.cat-row .meter i { display:block; height:100%; border-radius:3px; }
+.cat-row .foot { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:5px; }
+
 .me-row { display:flex; align-items:center; gap:13px; padding:16px; background:var(--card); }
 .avatar { width:44px; height:44px; border-radius:999px; background:var(--ink); color:var(--on-ink); display:flex; align-items:center; justify-content:center; font-weight:600; font-size:16px; flex:none; }
 .code-box {
@@ -464,6 +478,12 @@ nav.bottom svg { width:21px; height:21px; }
       <div style="height:20px;"></div>
     </section>
 
+    <!-- ---------------- GASTOS ---------------- -->
+    <section id="viewSpend" class="hidden">
+      <div id="spendBody"><div class="empty">Cargando…</div></div>
+      <div style="height:20px;"></div>
+    </section>
+
     <!-- ---------------- SIMULAR ---------------- -->
     <section id="viewSim" class="hidden">
       <h2>Simular pagos</h2>
@@ -482,6 +502,7 @@ nav.bottom svg { width:21px; height:21px; }
   <nav class="bottom">
     <button data-view="home" data-icon="home" class="on">Resumen</button>
     <button data-view="debt" data-icon="wallet">Deuda</button>
+    <button data-view="spend" data-icon="cart" data-admin="1">Gastos</button>
     <button data-view="sim" data-icon="calc">Simular</button>
     <button data-view="settings" data-icon="settings">Ajustes</button>
   </nav>
@@ -575,6 +596,9 @@ const S = {
   homeCur: null,        // moneda que se muestra en el resumen
   debtCur: null,        // moneda que se muestra en la deuda abierta (si tiene varias)
   side: "owe",          // que lado se mira: "owe" lo que debo | "owed" lo que me deben
+  spend: null,          // /api/expenses: { categories, expenses, today }
+  spendMonth: null,     // mes que se mira en Gastos (YYYY-MM)
+  spendCur: null,       // moneda que se muestra en Gastos
   recovery: null,
   simScen: null,        // escenarios del simulador (persisten al cambiar de vista)
 };
@@ -736,6 +760,8 @@ const ICONS = {
   flag:      '<path d="M5 21V4.5M5 4.5h12.5l-2 4 2 4H5"/>',
   archive:   '<rect x="3" y="4" width="18" height="4.5" rx="1.2"/><path d="M4.5 8.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V8.5M10 13h4"/>',
   send:      '<path d="M21 3L10.5 13.5M21 3l-7 18-3.5-7.5L3 10z"/>',
+  cart:      '<circle cx="9.5" cy="20" r="1.4"/><circle cx="17.5" cy="20" r="1.4"/><path d="M2.5 3.5h2.2l2.6 11.2h11.4l2.3-8.2H6.2"/>',
+  tag:       '<path d="M11.3 2.8H20a1.2 1.2 0 0 1 1.2 1.2v8.7a1.2 1.2 0 0 1-.35.85l-8.2 8.2a1.2 1.2 0 0 1-1.7 0L2.8 13.05a1.2 1.2 0 0 1 0-1.7l8.5-8.2z"/><path d="M17 7h.01"/>',
   coins:     '<ellipse cx="9" cy="7" rx="6" ry="2.6"/><path d="M3 7v4c0 1.4 2.7 2.6 6 2.6s6-1.2 6-2.6V7"/><path d="M3 11v4c0 1.4 2.7 2.6 6 2.6 1 0 2-.1 2.9-.3"/><path d="M13 13.5c.9 1.2 3.2 2 5.5 1.7 2.2-.3 3.5-1.3 3.5-2.3v-1.4"/><ellipse cx="17" cy="11.5" rx="4.5" ry="2"/><path d="M12.5 11.5V16c0 1.1 2 2 4.5 2s4.5-.9 4.5-2v-4.5"/>',
 };
 function icon(name, cls = "") {
@@ -918,6 +944,7 @@ function recoverScreen() {
 
 function logout() {
   S.token = ""; S.me = null; S.account = null; S.sum = null; S.entries = null;
+  S.spend = null; S.spendMonth = null; S.spendCur = null;
   S.view = "home"; S.simScen = null;     // quien entre despues arranca en el resumen
   ["dd_token", "dd_me", "dd_account"].forEach((k) => localStorage.removeItem(k));
   closeModal();
@@ -965,6 +992,10 @@ async function start() {
   $("login").classList.add("hidden");
   $("app").classList.remove("hidden");
   document.body.classList.remove("no-nav");
+  // Gastos del hogar es solo del dueño: al de solo lectura ni le aparece la
+  // pestaña (y el servidor le contesta 403 si la pide a mano).
+  document.querySelectorAll("nav.bottom button[data-admin]").forEach((b) => b.classList.toggle("hidden", !isAdmin()));
+  if (!isAdmin() && S.view === "spend") S.view = "home";
   await refresh();
   setView(S.view);
 }
@@ -1005,7 +1036,7 @@ function paintHeader() {
     $("headLbl").textContent = wordSide(d) === "owed" ? "Cobro" : "Deuda";
     $("headVal").textContent = d.name;
   } else {
-    $("headLbl").textContent = { home: "Resumen", sim: "Simular pagos", settings: "Ajustes" }[S.view] || "Deudas";
+    $("headLbl").textContent = { home: "Resumen", spend: "Gastos del hogar", sim: "Simular pagos", settings: "Ajustes" }[S.view] || "Deudas";
     $("headVal").textContent = S.account?.name || "Deudas";
   }
 }
@@ -1016,13 +1047,14 @@ $("meBtn").addEventListener("click", () => setView("settings"));
 function setView(v) {
   S.view = v;
   document.querySelectorAll("nav.bottom button").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
-  for (const [name, el] of Object.entries({ home: $("viewHome"), debt: $("viewDebt"), sim: $("viewSim"), settings: $("viewSettings") })) {
+  for (const [name, el] of Object.entries({ home: $("viewHome"), debt: $("viewDebt"), spend: $("viewSpend"), sim: $("viewSim"), settings: $("viewSettings") })) {
     el.classList.toggle("hidden", name !== v);
   }
   window.scrollTo(0, 0);
   paintHeader();
   if (v === "home") renderHome();
   if (v === "debt") loadDebt();
+  if (v === "spend") loadSpend();
   if (v === "sim") renderSim();
   if (v === "settings") renderSettings();
 }
@@ -1919,6 +1951,416 @@ function tiempoHumano(a, b) {
 }
 
 /* ===========================================================================
+   Vista: gastos del hogar
+
+   El mes manda: se elige un mes y todo lo de abajo habla de ese mes. Lo que uno
+   quiere saber al abrir esto es una sola cosa — "¿cuánto llevo y me estoy
+   pasando?" — asi que eso va arriba y grande, y el detalle debajo.
+
+   El presupuesto es un tope que uno se propone, no una regla: pasarse no
+   bloquea nada, solo se pinta en rojo.
+   =========================================================================== */
+const catById = (id) => (S.spend?.categories || []).find((c) => c.id === id) || null;
+// El color de una categoria sigue a la categoria (su orden de creacion), no a
+// su posicion en la lista de este mes: si se filtra o se reordena, el verde
+// sigue siendo el verde.
+const catColor = (id) => {
+  const i = (S.spend?.categories || []).findIndex((c) => c.id === id);
+  return i < 0 ? "var(--faint)" : SERIES[i % SERIES.length];
+};
+
+async function loadSpend() {
+  if (!isAdmin()) return setView("home");
+  if (!S.spend) {
+    try { S.spend = await api("/api/expenses"); }
+    catch (err) { $("spendBody").innerHTML = `<div class="msg err">${esc(err.message)}</div>`; return; }
+  }
+  renderSpend();
+}
+
+// Vuelve a pedir los gastos (despues de cualquier cambio).
+async function refreshSpend() {
+  S.spend = await api("/api/expenses");
+  if (S.view === "spend") renderSpend();
+}
+
+function renderSpend() {
+  const body = $("spendBody");
+  const { categories, expenses } = S.spend;
+  const activas = categories.filter((c) => c.active);
+
+  if (!categories.length) {
+    body.innerHTML = `
+      <div class="card" style="margin-top:18px;">
+        ${emptyState("cart", "Para llevar el gasto del hogar hacen falta <b>categorías</b>:<br>Comida, Casa, Transporte…")}
+        <div class="pad" style="padding-top:0;">
+          <button class="btn primary wide" id="spSeed">${icon("plus")}Crear las categorías típicas</button>
+          <button class="btn wide" id="spNewCat" style="margin-top:8px;">Crear la mía</button>
+        </div>
+      </div>`;
+    $("spSeed").addEventListener("click", async () => {
+      try { await api("/api/categories?seed=1", { method: "POST" }); await refreshSpend(); toast("Categorías creadas"); }
+      catch (err) { toast(err.message, "err"); }
+    });
+    $("spNewCat").addEventListener("click", () => categoryForm(null));
+    return;
+  }
+
+  const mes = S.spendMonth || monthKey(S.spend.today);
+  S.spendMonth = mes;
+  const delMes = expenses.filter((e) => monthKey(e.day) === mes);
+  // Monedas que aparecen: las de los gastos del mes y las de los presupuestos.
+  const curs = [...new Set([...delMes.map((e) => e.currency), ...activas.filter((c) => c.budget).map((c) => c.currency), "NIO"])];
+  curs.sort((a) => (a === "NIO" ? -1 : 1));
+  const cur = curs.includes(S.spendCur) ? S.spendCur : curs[0];
+  S.spendCur = cur;
+  const enCur = delMes.filter((e) => e.currency === cur);
+  const gastado = enCur.reduce((a, e) => a + e.amount, 0);
+  // El presupuesto del mes es la suma de los topes de las categorias EN ESTA
+  // MONEDA (las que no tienen tope no suman nada, y se avisa abajo).
+  const conTope = activas.filter((c) => c.budget && c.currency === cur);
+  const tope = conTope.reduce((a, c) => a + c.budget, 0);
+  const esteMes = mes === monthKey(S.spend.today);
+  // Cuanto del mes ha pasado: comparar "llevo 60%" contra "va el 50% del mes"
+  // es lo que de verdad dice si uno va bien o mal.
+  const diasMes = new Date(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)), 0).getDate();
+  const diaHoy = esteMes ? Number(S.spend.today.slice(8, 10)) : diasMes;
+  const pctMes = Math.round((diaHoy / diasMes) * 100);
+  const pctGasto = tope > 0 ? Math.round((gastado / tope) * 100) : 0;
+  const estado = !tope ? "" : pctGasto > 100 ? "bad" : pctGasto > pctMes + 10 ? "warn" : "ok";
+
+  // Por categoria, de mayor a menor: es el orden en el que uno se pregunta
+  // "¿en qué se me fue la plata?".
+  const porCat = activas.map((c) => {
+    const suyos = enCur.filter((e) => e.categoryId === c.id);
+    return { cat: c, total: suyos.reduce((a, e) => a + e.amount, 0), n: suyos.length };
+  }).filter((x) => x.total > 0 || (x.cat.budget && x.cat.currency === cur));
+  const sinCat = enCur.filter((e) => e.categoryId == null);
+  if (sinCat.length) porCat.push({ cat: { id: null, name: "Sin categoría", budget: null }, total: sinCat.reduce((a, e) => a + e.amount, 0), n: sinCat.length });
+  porCat.sort((a, b) => b.total - a.total);
+  const maxCat = Math.max(1, ...porCat.map((x) => x.total));
+
+  // Gasto por mes (12 meses) con el tope como referencia, en la misma escala.
+  const months = lastMonths(12), labels = months.map(monthLabel);
+  const porMes = months.map((m) => expenses.filter((e) => e.currency === cur && monthKey(e.day) === m).reduce((a, e) => a + e.amount, 0));
+  const serieMes = [{ name: "Gastado", color: SERIES[0], values: porMes }];
+  if (tope > 0) serieMes.push({ name: "Presupuesto", color: SERIES[3], values: months.map(() => tope) });
+
+  body.innerHTML = `
+    <div class="daybar" style="margin:14px 0 12px;">
+      <button class="nav" id="spPrev" aria-label="Mes anterior">${icon("left")}</button>
+      <div class="day"><b class="cap">${monthLong(mes)}</b><small>${plural(delMes.length, "gasto", "gastos")}${esteMes ? ` · día ${diaHoy} de ${diasMes}` : ""}</small></div>
+      <button class="nav" id="spNext" aria-label="Mes siguiente" ${mes >= monthKey(S.spend.today) ? "disabled style='opacity:.3'" : ""}>${icon("right")}</button>
+    </div>
+    ${curs.length > 1 ? `<div class="chips" style="margin-bottom:12px;">${curs.map((c) => `<button class="chip ${c === cur ? "on" : ""}" data-spc="${c}">${CUR[c].sym} ${CUR[c].label}</button>`).join("")}</div>` : ""}
+
+    <div class="card hero">
+      <div class="lbl">Gastado en ${monthLong(mes).split(" ")[0]}</div>
+      <div class="val"><small>${CUR[cur].sym}</small>${nfMoney.format(gastado)}</div>
+      ${tope > 0 ? `
+        <div class="sub">de ${money(tope, cur)} que te propusiste · <b style="color:var(${estado === "bad" ? "--bad" : estado === "warn" ? "--half" : "--ok"});">${pctGasto}%</b>${esteMes ? ` (va el ${pctMes}% del mes)` : ""}</div>
+        <div class="meter" style="margin-top:12px; height:8px;">
+          <i style="width:${Math.min(100, pctGasto)}%; background:var(${estado === "bad" ? "--bad" : estado === "warn" ? "--half" : "--ok"});"></i>
+        </div>
+        ${pctGasto > 100 ? `<div class="sub" style="margin-top:8px; color:var(--bad);">Te pasaste por ${money(gastado - tope, cur)}</div>`
+          : `<div class="sub" style="margin-top:8px;">Te quedan ${money(tope - gastado, cur)}${esteMes && diaHoy < diasMes ? ` · ${money((tope - gastado) / (diasMes - diaHoy + 1), cur)} por día` : ""}</div>`}
+      ` : `<div class="sub">Sin presupuesto puesto. Ponle un tope a tus categorías y aquí verás cuánto llevas.</div>`}
+    </div>
+
+    ${isAdmin() ? `<button class="btn primary wide" id="spAdd" style="margin-top:12px;">${icon("plus")}Anotar un gasto</button>` : ""}
+
+    ${porCat.length ? `
+    <h3>En qué se fue</h3>
+    <div class="card pad">
+      ${porCat.map(({ cat, total, n }) => {
+        const p = cat.budget && cat.currency === cur ? Math.round((total / cat.budget) * 100) : null;
+        const col = cat.id == null ? "var(--faint)" : catColor(cat.id);
+        return `
+        <button class="cat-row" data-cat="${cat.id ?? ""}">
+          <div class="row" style="gap:8px;">
+            <span class="grow ellip" style="font-weight:500;">${esc(cat.name)}</span>
+            <span class="num" style="font-weight:600;">${money(total, cur)}</span>
+          </div>
+          <div class="meter" style="margin-top:7px;"><i style="width:${Math.round((total / maxCat) * 100)}%; background:${col};"></i></div>
+          <div class="foot">
+            <span>${plural(n, "gasto", "gastos")}</span>
+            <span>${p == null ? `${Math.round((total / (gastado || 1)) * 100)}% del mes` : `${p}% de ${money(cat.budget, cur)}${p > 100 ? " · te pasaste" : ""}`}</span>
+          </div>
+        </button>`;
+      }).join("")}
+    </div>` : ""}
+
+    ${porMes.some((v) => v > 0) ? `
+    <div class="card pad" style="margin-top:14px;">
+      <p class="chart-title">Cuánto gastas cada mes</p>
+      <p class="chart-sub">Últimos 12 meses · ${CUR[cur].label}${tope > 0 ? " · la línea es tu presupuesto" : ""}</p>
+      <div id="spChart"></div>
+      ${chartTable(labels, serieMes, (v) => money(v, cur))}
+    </div>` : ""}
+
+    <h3>Los gastos de ${monthLong(mes)}</h3>
+    <div class="card" id="spList">
+      ${enCur.length ? gastosHtml(enCur) : emptyState("cart", `Sin gastos en ${CUR[cur].label} este mes.`)}
+    </div>`;
+
+  // Grafico: barras por mes; el presupuesto va como una linea sobre las mismas
+  // barras, en la MISMA escala (un solo eje: nunca dos escalas en un grafico).
+  if ($("spChart")) {
+    barChart($("spChart"), { series: [serieMes[0]], labels, fmtFull: (v) => money(v, cur) });
+    if (tope > 0) pintaTope($("spChart"), months.length, tope, Math.max(...porMes, tope));
+  }
+  $("spPrev").addEventListener("click", () => { S.spendMonth = shiftMonthKey(mes, -1); renderSpend(); });
+  $("spNext").addEventListener("click", () => { if (mes < monthKey(S.spend.today)) { S.spendMonth = shiftMonthKey(mes, 1); renderSpend(); } });
+  body.querySelectorAll("[data-spc]").forEach((b) => b.addEventListener("click", () => { S.spendCur = b.dataset.spc; renderSpend(); }));
+  $("spAdd")?.addEventListener("click", () => expenseForm({ day: esteMes ? S.spend.today : `${mes}-01`, currency: cur }));
+  body.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => categoryDetail(b.dataset.cat === "" ? null : Number(b.dataset.cat), mes, cur)));
+  body.querySelectorAll("[data-exp]").forEach((b) => b.addEventListener("click", () => expenseDetail(Number(b.dataset.exp))));
+}
+
+const shiftMonthKey = (mes, n) => monthKey(shiftMonths(`${mes}-01`, n));
+
+// Lista de gastos agrupada por dia.
+function gastosHtml(list) {
+  let out = "", dia = null;
+  for (const e of list) {
+    if (e.day !== dia) {
+      dia = e.day;
+      const total = list.filter((x) => x.day === dia).reduce((a, x) => a + x.amount, 0);
+      out += `<div class="month-head" style="display:flex; justify-content:space-between;"><span class="cap">${prettyDayLong(dia).replace(/ de \d{4}$/, "")}</span><span>${money(total, e.currency)}</span></div>`;
+    }
+    const c = e.categoryId == null ? null : catById(e.categoryId);
+    out += `
+      <button class="entry" data-exp="${e.id}">
+        <div class="dir" style="background:var(--soft); color:${e.categoryId == null ? "var(--faint)" : catColor(e.categoryId)};">${icon("tag")}</div>
+        <div class="grow">
+          <div class="what ellip">${esc(e.reason || c?.name || "Gasto")}</div>
+          <div class="when">${esc(c?.name || "Sin categoría")}${e.hasReceipt ? icon("image") : ""}</div>
+        </div>
+        <div class="amt">${money(e.amount, e.currency)}</div>
+      </button>`;
+  }
+  return out;
+}
+
+// La linea del presupuesto encima de las barras del grafico de meses.
+function pintaTope(el, n, tope, max) {
+  const svg = el.querySelector("svg");
+  if (!svg) return;
+  const W = 600, H = 200, ML = 46, MR = 14, MT = 12, MB = 26;
+  const ticks = niceTicks(max), top = ticks[ticks.length - 1] || 1;
+  const y = MT + (1 - tope / top) * (H - MT - MB);
+  svg.insertAdjacentHTML("beforeend",
+    `<line x1="${ML}" x2="${W - MR}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${SERIES[3]}" stroke-width="2" stroke-linecap="round"/>`);
+}
+
+/* --------------------------- detalle de una categoria ------------------- */
+function categoryDetail(catId, mes, cur) {
+  const c = catId == null ? { id: null, name: "Sin categoría", budget: null } : catById(catId);
+  if (!c) return;
+  const list = S.spend.expenses.filter((e) => monthKey(e.day) === mes && e.currency === cur && (e.categoryId ?? null) === catId);
+  const total = list.reduce((a, e) => a + e.amount, 0);
+  // Los ultimos 6 meses de ESTA categoria: si algo se disparó, se ve aquí.
+  const months = lastMonths(6), labels = months.map(monthLabel);
+  const serie = [{ name: c.name, color: catId == null ? "var(--faint)" : catColor(catId), values: months.map((m) => S.spend.expenses.filter((e) => e.currency === cur && monthKey(e.day) === m && (e.categoryId ?? null) === catId).reduce((a, e) => a + e.amount, 0)) }];
+  openModal(`
+    <h2>${esc(c.name)}</h2>
+    <p class="muted" style="margin:-6px 0 14px;">${monthLong(mes)} · ${plural(list.length, "gasto", "gastos")}</p>
+    <div class="tiles" style="grid-template-columns:1fr 1fr;">
+      <div class="tile"><div class="lbl">Gastado</div><div class="val">${money(total, cur)}</div></div>
+      <div class="tile"><div class="lbl">Presupuesto</div><div class="val ${c.budget && total > c.budget ? "bad" : ""}">${c.budget ? money(c.budget, c.currency) : "—"}</div></div>
+    </div>
+    <div class="card pad" style="margin-top:12px;">
+      <p class="chart-title">Últimos 6 meses</p>
+      <div id="cdChart"></div>
+      ${chartTable(labels, serie, (v) => money(v, cur))}
+    </div>
+    <h3>Los gastos del mes</h3>
+    <div class="card" id="cdList">${list.length ? gastosHtml(list) : emptyState("cart", "Sin gastos este mes.")}</div>
+    ${catId != null ? `<button class="btn wide" id="cdEdit" style="margin-top:12px;">${icon("edit")}Editar categoría y presupuesto</button>` : ""}`);
+  barChart($("cdChart"), { series: serie, labels, fmtFull: (v) => money(v, cur), height: 160 });
+  $("cdEdit")?.addEventListener("click", () => categoryForm(c));
+  $("modalRoot").querySelectorAll("[data-exp]").forEach((b) => b.addEventListener("click", () => expenseDetail(Number(b.dataset.exp))));
+}
+
+/* ------------------------------ alta de gasto --------------------------- */
+function expenseForm(e) {
+  const isNew = !e.id;
+  const cats = S.spend.categories.filter((c) => c.active || c.id === e.categoryId);
+  let receipt = undefined;
+  openModal(`
+    <h2>${isNew ? "Anotar un gasto" : "Editar gasto"}</h2>
+    <form id="xForm" class="card pad">
+      <div class="two">
+        <label class="field"><span>Monto *</span><input id="xAmount" type="number" inputmode="decimal" step="0.01" min="0.01" required value="${e.amount ?? ""}" placeholder="0.00"></label>
+        <label class="field"><span>Moneda</span>
+          <select id="xCur">${Object.entries(CUR).map(([k, v]) => `<option value="${k}" ${(e.currency || "NIO") === k ? "selected" : ""}>${v.sym} ${v.label}</option>`).join("")}</select></label>
+      </div>
+      <div class="two">
+        <label class="field"><span>Fecha *</span><input id="xDay" type="date" required value="${e.day || todayApp()}" max="${todayApp()}"></label>
+        <label class="field"><span>Categoría</span>
+          <select id="xCat">
+            <option value="">Sin categoría</option>
+            ${cats.map((c) => `<option value="${c.id}" ${e.categoryId === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+          </select></label>
+      </div>
+      <label class="field"><span>En qué</span><input id="xReason" maxlength="120" value="${esc(e.reason || "")}" placeholder="Supermercado, gasolina, luz…"></label>
+      <label class="field"><span>Nota (opcional)</span><textarea id="xNote" maxlength="500" placeholder="Cualquier detalle">${esc(e.note || "")}</textarea></label>
+      <div class="field">
+        <span>Captura del recibo</span>
+        <div id="xReceiptBox"></div>
+        <input type="file" id="xFile" accept="image/*" class="vhidden">
+      </div>
+      <div id="xMsg"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Anotar" : "Guardar cambios"}</button>
+    </form>`);
+
+  const paintReceipt = (uri) => {
+    $("xReceiptBox").innerHTML = uri
+      ? `<div class="receipt-thumb"><img src="${esc(uri)}" alt=""><button type="button" class="btn sm" id="xRm">${icon("cross")}Quitar</button></div>`
+      : `<button type="button" class="receipt-drop" id="xDrop" style="width:100%;">${icon("camera")}<div>${e.hasReceipt && receipt === undefined ? "Ya tiene captura. Toca para reemplazarla" : "Tocar para elegir una imagen"}</div></button>`;
+    $("xDrop")?.addEventListener("click", () => $("xFile").click());
+    $("xRm")?.addEventListener("click", () => { receipt = null; paintReceipt(null); });
+  };
+  paintReceipt(null);
+  if (!isNew && e.hasReceipt) {
+    api(`/api/expenses?id=${e.id}&receipt=1`).then(({ image }) => { if (receipt === undefined && $("xReceiptBox")) paintReceipt(image); }).catch(() => {});
+  }
+  $("xFile").addEventListener("change", async () => {
+    const f = $("xFile").files[0];
+    if (!f) return;
+    try { receipt = await fileToJpeg(f); paintReceipt(receipt); }
+    catch (err) { showErr("xMsg", err); }
+    $("xFile").value = "";
+  });
+
+  $("xForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true; $("xMsg").innerHTML = "";
+    const body = {
+      day: $("xDay").value, amount: $("xAmount").value, currency: $("xCur").value,
+      categoryId: $("xCat").value || null, reason: $("xReason").value, note: $("xNote").value,
+    };
+    if (receipt !== undefined) body.receipt = receipt;
+    try {
+      if (isNew) await api("/api/expenses", { method: "POST", body });
+      else await api(`/api/expenses?id=${e.id}`, { method: "PUT", body });
+      closeModal(); toast(isNew ? "Gasto anotado" : "Guardado");
+      // El mes que se mira pasa a ser el del gasto: si no, uno anota algo de
+      // otro mes y parece que no se guardo.
+      S.spendMonth = monthKey(body.day); S.spendCur = body.currency;
+      await refreshSpend();
+    } catch (err) { showErr("xMsg", err); btn.disabled = false; }
+  });
+}
+
+async function expenseDetail(id) {
+  const e = S.spend.expenses.find((x) => x.id === id);
+  if (!e) return;
+  const c = e.categoryId == null ? null : catById(e.categoryId);
+  openModal(`
+    <div class="row" style="gap:12px; margin-top:6px;">
+      <div class="dir" style="width:44px; height:44px; border-radius:999px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line); background:var(--soft); color:${e.categoryId == null ? "var(--faint)" : catColor(e.categoryId)};">${icon("tag")}</div>
+      <div class="grow">
+        <div class="muted">${esc(c?.name || "Sin categoría")} · ${prettyDayLong(e.day)}</div>
+        <div style="font-size:26px; font-weight:600; letter-spacing:-.02em;">${money(e.amount, e.currency)}</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <div class="list-item"><span class="muted" style="width:82px; flex:none;">En qué</span><span class="grow">${esc(e.reason || "—")}</span></div>
+      ${e.note ? `<div class="list-item" style="align-items:flex-start;"><span class="muted" style="width:82px; flex:none;">Nota</span><span class="grow" style="white-space:pre-wrap;">${esc(e.note)}</span></div>` : ""}
+      <div class="list-item"><span class="muted" style="width:82px; flex:none;">Anotado</span><span class="grow">${esc(e.createdBy || "—")} · ${fechaHora(e.createdAt)}</span></div>
+    </div>
+    <h3>Captura</h3>
+    <div id="xdReceipt">${e.hasReceipt ? `<div class="empty" style="padding:20px;">Cargando…</div>` : `<div class="card">${emptyState("image", "Sin captura. Puedes agregarla editando el gasto.")}</div>`}</div>
+    <div class="row" style="gap:8px; margin-top:16px;">
+      <button class="btn grow" id="xdEdit">${icon("edit")}Editar</button>
+      <button class="btn danger grow" id="xdDel">${icon("trash")}Borrar</button>
+    </div>`);
+  $("xdEdit").addEventListener("click", () => expenseForm(e));
+  $("xdDel").addEventListener("click", async () => {
+    if (!(await ask({ title: "¿Borrar este gasto?", text: `${money(e.amount, e.currency)} del ${prettyDay(e.day, { year: true })}. Se borra también su captura.`, ok: "Borrar", danger: true }))) return;
+    try { await api(`/api/expenses?id=${e.id}`, { method: "DELETE" }); closeModal(); toast("Gasto borrado"); await refreshSpend(); }
+    catch (err) { toast(err.message, "err"); }
+  });
+  if (e.hasReceipt) {
+    try {
+      const { image } = await api(`/api/expenses?id=${e.id}&receipt=1`);
+      if ($("xdReceipt")) $("xdReceipt").innerHTML = `<img class="receipt-view" src="${esc(image)}" alt="Captura del recibo">`;
+    } catch (err) { if ($("xdReceipt")) $("xdReceipt").innerHTML = `<div class="msg err">${esc(err.message)}</div>`; }
+  }
+}
+
+/* -------------------------- categorias y presupuesto -------------------- */
+async function categoriesScreen() {
+  if (!S.spend) { try { S.spend = await api("/api/expenses"); } catch (err) { return toast(err.message, "err"); } }
+  const cats = S.spend.categories;
+  const cur = S.spendCur || "NIO";
+  const tope = cats.filter((c) => c.active && c.budget && c.currency === cur).reduce((a, c) => a + c.budget, 0);
+  openModal(`
+    <h2>Categorías y presupuesto</h2>
+    <p class="muted" style="margin:-6px 0 12px;">El presupuesto es mensual y es un tope que te propones: pasarte no bloquea nada, solo se pinta en rojo.${tope ? ` Ahora suma <b>${money(tope, cur)}</b> al mes.` : ""}</p>
+    <div class="card">
+      ${cats.length ? cats.map((c) => `
+        <button class="list-item" data-c="${c.id}">
+          <span style="width:10px; height:10px; border-radius:3px; background:${catColor(c.id)}; flex:none;"></span>
+          <div class="grow">
+            <div class="ellip"><b>${esc(c.name)}</b>${c.active ? "" : ' <span class="badge off">archivada</span>'}</div>
+            <div class="muted">${c.budget ? `${money(c.budget, c.currency)} al mes` : "sin presupuesto"} · ${plural(c.expenses, "gasto", "gastos")}</div>
+          </div>
+          ${icon("chevron", "chev")}
+        </button>`).join("") : emptyState("tag", "Sin categorías.")}
+    </div>
+    <button class="btn primary wide" id="catNew" style="margin-top:12px;">${icon("plus")}Nueva categoría</button>`);
+  $("modalRoot").querySelectorAll("[data-c]").forEach((b) => b.addEventListener("click", () => categoryForm(cats.find((c) => c.id === Number(b.dataset.c)))));
+  $("catNew").addEventListener("click", () => categoryForm(null));
+}
+
+function categoryForm(c) {
+  const isNew = !c;
+  openModal(`
+    <h2>${isNew ? "Nueva categoría" : esc(c.name)}</h2>
+    <form id="cForm2" class="card pad">
+      <label class="field"><span>Nombre *</span><input id="cName" required maxlength="60" value="${esc(c?.name || "")}" placeholder="Comida, Casa, Transporte…"></label>
+      <div class="two">
+        <label class="field"><span>Presupuesto mensual</span><input id="cBudget" type="number" inputmode="decimal" min="0.01" step="0.01" value="${c?.budget ?? ""}" placeholder="Sin tope">
+          <small class="hint">Déjalo vacío si no quieres tope.</small></label>
+        <label class="field"><span>Moneda del tope</span>
+          <select id="cCur">${Object.entries(CUR).map(([k, v]) => `<option value="${k}" ${(c?.currency || S.spendCur || "NIO") === k ? "selected" : ""}>${v.sym} ${v.label}</option>`).join("")}</select></label>
+      </div>
+      ${isNew ? "" : `<label class="row" style="margin-bottom:12px; gap:8px;"><input type="checkbox" id="cActive" ${c.active ? "checked" : ""} style="width:20px; height:20px;"><span>Categoría en uso</span><small class="muted" style="margin-left:auto;">archivada = ya no se ofrece</small></label>`}
+      <div id="cMsg2"></div>
+      <button class="btn primary wide" type="submit">${isNew ? "Crear" : "Guardar"}</button>
+    </form>
+    ${isNew ? "" : `<button class="btn danger wide" id="cDel2" style="margin-top:10px;">${icon("trash")}Borrar la categoría</button>`}`);
+  $("cForm2").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = { name: $("cName").value, budget: $("cBudget").value, currency: $("cCur").value };
+    if (!isNew) body.active = $("cActive").checked;
+    try {
+      if (isNew) await api("/api/categories", { method: "POST", body });
+      else await api(`/api/categories?id=${c.id}`, { method: "PUT", body });
+      closeModal(); toast("Guardado");
+      await refreshSpend();
+      categoriesScreen();
+    } catch (err) { showErr("cMsg2", err); }
+  });
+  $("cDel2")?.addEventListener("click", async () => {
+    if (!(await ask({
+      title: `¿Borrar "${c.name}"?`,
+      // Los gastos NO se borran: la plata se gasto igual, y quitarla del total
+      // seria mentir. Quedan como "Sin categoria".
+      text: c.expenses
+        ? `Sus ${plural(c.expenses, "gasto queda", "gastos quedan")} sin categoría, pero siguen contando en los totales. Si solo quieres dejar de usarla, archívala.`
+        : "No tiene gastos, así que no se pierde nada.",
+      ok: "Borrar", danger: true,
+    }))) return;
+    try { await api(`/api/categories?id=${c.id}&hard=1`, { method: "DELETE" }); closeModal(); toast("Categoría borrada"); await refreshSpend(); categoriesScreen(); }
+    catch (err) { toast(err.message, "err"); }
+  });
+}
+
+/* ===========================================================================
    Vista: ajustes
    =========================================================================== */
 function renderSettings() {
@@ -1949,6 +2391,12 @@ function renderSettings() {
       ${admin ? item("users", "people", "Usuarios con acceso") : ""}
     </div>
 
+    ${admin ? `
+      <h3>Gastos del hogar</h3>
+      <div class="card">
+        ${item("cats", "tag", "Categorías y presupuesto", `<span class="muted">${(S.spend?.categories || []).filter((c) => c.active).length || ""}</span>`)}
+      </div>` : ""}
+
     ${yaInstalada() ? "" : `<h3>Aplicación</h3><div class="card">${item("instalar", "install", "Instalar en el teléfono", promptInstalar ? '<span class="badge admin">listo</span>' : "")}</div>`}
 
     <h3>Cuenta</h3>
@@ -1959,7 +2407,7 @@ function renderSettings() {
     </div>`;
   $("themeSeg").addEventListener("click", (e) => { const b = e.target.closest("[data-theme]"); if (!b) return; applyTheme(b.dataset.theme); renderSettings(); });
   $("settingsBody").querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => ({
-    acc: accountNameScreen, debts: debtsScreen, users: usersScreen, instalar: instalarApp,
+    acc: accountNameScreen, debts: debtsScreen, users: usersScreen, cats: categoriesScreen, instalar: instalarApp,
     pw: passwordScreen, rec: recoveryScreen,
     out: async () => { if (await ask({ title: "¿Cerrar sesión?", ok: "Cerrar sesión", danger: true })) logout(); },
   }[b.dataset.act]())));

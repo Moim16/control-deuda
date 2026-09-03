@@ -12,6 +12,8 @@ import auth from "../api/auth.js";
 import debts from "../api/debts.js";
 import entries from "../api/entries.js";
 import comments from "../api/comments.js";
+import categories from "../api/categories.js";
+import expenses from "../api/expenses.js";
 import { db, ensureSchema } from "../lib/db.js";
 
 function call(h, { method = "GET", query = {}, body, token } = {}) {
@@ -90,6 +92,42 @@ const V = r.body.token;
 await call(comments, { method: "POST", token: V, body: { debtId: D1, entryId: ids[`${D1}-${mesAtras(1, 15)}`], text: "Este fue el del aguinaldo, te lo pasé por transferencia." } });
 await call(comments, { method: "POST", token: A, body: { debtId: D1, entryId: ids[`${D1}-${mesAtras(1, 15)}`], text: "Sí, ya quedó anotado 👍" } });
 await call(comments, { method: "POST", token: V, body: { debtId: D1, text: "¿Cuadramos el mes que viene lo que falta?" } });
+
+/* --------------------------------- gastos --------------------------------- */
+r = await call(categories, { method: "POST", query: { seed: "1" }, token: A });
+const CAT = {};
+for (const c of r.body.categories) CAT[c.name] = c.id;
+// Presupuesto mensual a las que se usan de verdad.
+for (const [nombre, tope] of [["Comida", 9000], ["Casa y servicios", 5000], ["Transporte", 2500], ["Otros", 1500]]) {
+  await call(categories, { method: "PUT", query: { id: String(CAT[nombre]) }, token: A, body: { budget: tope } });
+}
+
+// Gastos de los ultimos 5 meses. El mes en curso queda un poco pasado en
+// Comida, para que se vea el aviso de que uno va sobre el presupuesto.
+const dia = (mes, d) => mesAtras(mes, d);
+const gastos = [];
+const receta = [
+  ["Comida", [3200, 2100, 1800, 2400]], ["Casa y servicios", [2800, 1900]],
+  ["Transporte", [900, 700]], ["Salud", [1200]], ["Otros", [600, 450]],
+];
+for (let m = 4; m >= 0; m--) {
+  let d = 3;
+  for (const [cat, montos] of receta) {
+    for (const monto of montos) {
+      const factor = m === 0 && cat === "Comida" ? 1.35 : 1;   // este mes se gasto mas en comida
+      gastos.push([CAT[cat], dia(m, Math.min(28, d)), Math.round(monto * factor), {
+        Comida: "Supermercado", "Casa y servicios": "Luz y agua", Transporte: "Gasolina",
+        Salud: "Farmacia", Otros: "Varios",
+      }[cat]]);
+      d += 4;
+    }
+  }
+}
+gastos.push([null, dia(0, 6), 45, "Café", "USD"]);
+for (const [categoryId, day, amount, reason, currency] of gastos) {
+  r = await call(expenses, { method: "POST", token: A, body: { categoryId, day, amount, reason, currency } });
+  if (r.status !== 201) console.error("gasto fallo", r.body);
+}
 
 console.log("\nDemo lista:");
 console.log("  moises  / deuda1234   (dueño)");
