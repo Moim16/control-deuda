@@ -45,6 +45,10 @@ r = await call(debts, { method: "POST", token: A, body: { name: "Tarjeta Amex", 
 const D2 = r.body.debt.id;
 r = await call(debts, { method: "POST", token: A, body: { name: "Hermana", kind: "person", currency: "USD", counterpart: "Ana" } });
 const D3 = r.body.debt.id;
+// Un COBRO: plata que me deben a mi, con acuerdo de pago mensual (ya vencido).
+r = await call(debts, { method: "POST", token: A, body: { name: "Primo Carlos", kind: "person", direction: "owed", currency: "NIO", counterpart: "Carlos",
+  note: "Le presté para el taller", dueEvery: "monthly", dueAmount: 1000, dueFrom: mesAtras(3, 15) } });
+const D4 = r.body.debt.id;
 
 const movs = [
   [D1, "loan", mesAtras(9, 5), 8000, "Para la moto"],
@@ -69,6 +73,9 @@ const movs = [
   [D3, "loan", mesAtras(4, 1), 600, "Pasaje"],
   [D3, "payment", mesAtras(2, 10), 200, "Abono"],
   [D3, "payment", mesAtras(0, 1), 150, "Abono"],
+  [D4, "loan", mesAtras(4, 2), 6000, "Herramientas para el taller"],
+  [D4, "payment", mesAtras(3, 16), 1000, "Primer abono"],
+  [D4, "payment", mesAtras(2, 14), 1000, "Abono"],
 ];
 const ids = {};
 for (const [debtId, kind, day, amount, reason, currency] of movs) {

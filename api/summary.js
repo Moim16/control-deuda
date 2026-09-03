@@ -12,8 +12,8 @@
 
 import { db, ensureSchema } from "../lib/db.js";
 import { today } from "../lib/day.js";
-import { currentUser, isAdmin, deny, debtScope } from "../lib/auth.js";
-import { DEBT_SELECT, rowToDebt } from "./debts.js";
+import { currentUser, deny, debtScope } from "../lib/auth.js";
+import { DEBT_SELECT, publicDebt } from "./debts.js";
 
 export default async function handler(req, res) {
   try {
@@ -52,11 +52,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       today: today(),
-      debts: debts.rows.map((d) => {
-        const out = rowToDebt(d);
-        if (!isAdmin(me)) delete out.viewers;
-        return out;
-      }),
+      debts: debts.rows.map((d) => publicDebt(d, me)),
       entries: entries.rows.map((e) => ({
         id: Number(e.id), debtId: Number(e.debtId), kind: e.kind, currency: e.currency, day: e.day,
         amount: Number(e.amount), reason: e.reason, hasReceipt: !!Number(e.hasReceipt),

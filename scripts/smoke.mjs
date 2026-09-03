@@ -122,6 +122,7 @@ check("moneda desconocida cae a NIO",
 
 r = await call(debts, { token: A.token });
 check("el admin ve sus 4 deudas con viewers=0", r.body.debts.length === 4 && r.body.debts.every((d) => d.viewers === 0), j(r.body.debts.map((d) => d.name)));
+const DEUDAS_BASE = 4;   // las de arriba; la seccion de cobros agrega mas
 r = await call(debts, { token: B.token });
 check("la otra cuenta no ve ninguna", r.body.debts.length === 0);
 check("la otra cuenta no puede editar la deuda ajena (404)",
@@ -130,6 +131,36 @@ check("ni borrarla", (await call(debts, { method: "DELETE", query: { id: String(
 
 r = await call(debts, { method: "PUT", query: { id: String(D1) }, token: A.token, body: { name: "Mi hermano", note: "Le debo desde 2025" } });
 check("editar nombre y nota", r.status === 200 && r.body.debt.name === "Mi hermano" && r.body.debt.note === "Le debo desde 2025", j(r.body));
+check("una deuda nace como 'yo debo' y sin acuerdo de pago",
+  r.body.debt.direction === "owe" && r.body.debt.dueEvery === null && r.body.debt.dueAmount === null);
+
+/* ========================================================================== */
+section("Cobros (me deben) y acuerdo de pago");
+
+r = await call(debts, { method: "POST", token: A.token,
+  body: { name: "Primo", direction: "owed", currency: "NIO", dueEvery: "monthly", dueAmount: "500", dueFrom: "2026-01-15" } });
+check("crear un cobro con acuerdo mensual", r.status === 201 && r.body.debt.direction === "owed"
+  && r.body.debt.dueEvery === "monthly" && r.body.debt.dueAmount === 500 && r.body.debt.dueFrom === "2026-01-15", j(r.body));
+const D4 = r.body.debt.id;
+check("direccion desconocida cae a 'owe'",
+  (await call(debts, { method: "POST", token: A.token, body: { name: "Z", direction: "sideways" } })).body.debt.direction === "owe");
+check("acuerdo sin monto -> 400",
+  (await call(debts, { method: "POST", token: A.token, body: { name: "Z", dueEvery: "monthly", dueFrom: "2026-01-15" } })).status === 400);
+check("acuerdo sin fecha -> 400",
+  (await call(debts, { method: "POST", token: A.token, body: { name: "Z", dueEvery: "monthly", dueAmount: 10 } })).status === 400);
+check("frecuencia invalida -> 400",
+  (await call(debts, { method: "POST", token: A.token, body: { name: "Z", dueEvery: "daily", dueAmount: 10, dueFrom: "2026-01-15" } })).status === 400);
+r = await call(entries, { method: "POST", token: A.token, body: { debtId: D4, kind: "loan", day: "2026-01-10", amount: 3000, reason: "Le presté" } });
+r = await call(entries, { method: "POST", token: A.token, body: { debtId: D4, kind: "payment", day: "2026-02-14", amount: 500, reason: "Me abonó" } });
+r = await call(debts, { token: A.token });
+let d4 = r.body.debts.find((d) => d.id === D4);
+check("el cobro lleva sus totales igual que una deuda y recuerda el ultimo abono",
+  d4.totals.NIO.balance === 2500 && d4.lastPaymentDay === "2026-02-14", j(d4));
+r = await call(debts, { method: "PUT", query: { id: String(D4) }, token: A.token, body: { dueEvery: "" } });
+check("dueEvery vacio borra el acuerdo completo", r.body.debt.dueEvery === null && r.body.debt.dueAmount === null && r.body.debt.dueFrom === null, j(r.body.debt));
+r = await call(debts, { method: "PUT", query: { id: String(D4) }, token: A.token, body: { direction: "owe" } });
+check("cambiar la direccion no toca los movimientos", r.body.debt.direction === "owe" && r.body.debt.totals.NIO.balance === 2500);
+await call(debts, { method: "PUT", query: { id: String(D4) }, token: A.token, body: { direction: "owed" } });
 
 /* ========================================================================== */
 section("Usuarios viewer y visibilidad");
@@ -145,6 +176,19 @@ check("el viewer entra", r.status === 200 && !!V.token);
 r = await call(debts, { token: V.token });
 check("el viewer ve SOLO su deuda", r.body.debts.length === 1 && r.body.debts[0].id === D1, j(r.body.debts));
 check("y sin el conteo de viewers", r.body.debts[0].viewers === undefined);
+check("ni el acuerdo de pago (es cosa del dueño)",
+  !("dueEvery" in r.body.debts[0]) && !("dueAmount" in r.body.debts[0]) && !("lastPaymentDay" in r.body.debts[0]), j(r.body.debts[0]));
+
+// Los COBROS son solo del dueño: aunque se le asigne uno por error, no lo ve.
+await call(auth, { method: "PUT", query: { id: String(V.userId) }, token: A.token, body: { debtIds: [D1, D4] } });
+r = await call(debts, { token: V.token });
+check("un cobro asignado por error no se le muestra al viewer",
+  r.body.debts.length === 1 && r.body.debts[0].id === D1, j(r.body.debts.map((d) => d.name)));
+check("y sus movimientos le dan 404", (await call(entries, { query: { debtId: String(D4) }, token: V.token })).status === 404);
+check("y no puede comentarlo", (await call(comments, { method: "POST", token: V.token, body: { debtId: D4, text: "hola" } })).status === 404);
+r = await call(summary, { token: V.token });
+check("el resumen del viewer tampoco trae cobros", r.body.debts.every((d) => d.id === D1) && r.body.entries.every((e) => e.debtId === D1), j(r.body.debts.map((d) => d.name)));
+await call(auth, { method: "PUT", query: { id: String(V.userId) }, token: A.token, body: { debtIds: [D1] } });
 check("el viewer no puede crear deudas (403)",
   (await call(debts, { method: "POST", token: V.token, body: { name: "Z" } })).status === 403);
 check("ni editar la suya (403)",
@@ -302,8 +346,10 @@ section("Resumen");
 
 await call(entries, { method: "POST", token: A.token, body: { debtId: D2, kind: "loan", day: "2026-04-01", amount: 300, reason: "Compra" } });
 r = await call(summary, { token: A.token });
-check("resumen: deudas, movimientos y comentarios", r.status === 200 && r.body.debts.length === 4 && r.body.entries.length === 4 && r.body.comments.length === 1, j({ d: r.body.debts.length, e: r.body.entries.length, c: r.body.comments.length }));
-check("movimientos en orden cronologico y con moneda", r.body.entries[0].day === "2026-01-10" && r.body.entries[3].day === "2026-04-01" && r.body.entries.every((e) => e.currency));
+// 4 deudas base + el cobro "Primo" + la "Z" de la prueba de direccion; movimientos: 3 de D1 + 2 de D4 + 1 de D2.
+check("resumen: deudas, movimientos y comentarios", r.status === 200 && r.body.debts.length === DEUDAS_BASE + 2 && r.body.entries.length === 6 && r.body.comments.length === 1, j({ d: r.body.debts.length, e: r.body.entries.length, c: r.body.comments.length }));
+check("movimientos en orden cronologico y con moneda", r.body.entries[0].day === "2026-01-10" && r.body.entries[5].day === "2026-04-01" && r.body.entries.every((e) => e.currency));
+check("el resumen trae la direccion y el acuerdo de cada deuda", r.body.debts.every((d) => "direction" in d && "dueEvery" in d));
 check("today en YYYY-MM-DD", /^\d{4}-\d{2}-\d{2}$/.test(r.body.today));
 r = await call(summary, { token: V.token });
 check("el viewer solo recibe lo suyo", r.body.debts.length === 1 && r.body.entries.every((e) => e.debtId === D1) && r.body.comments.every((c) => c.debtId === D1));

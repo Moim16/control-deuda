@@ -574,6 +574,7 @@ const S = {
   moveFilter: "all",    // all | loan | payment
   homeCur: null,        // moneda que se muestra en el resumen
   debtCur: null,        // moneda que se muestra en la deuda abierta (si tiene varias)
+  side: "owe",          // que lado se mira: "owe" lo que debo | "owed" lo que me deben
   recovery: null,
   simScen: null,        // escenarios del simulador (persisten al cambiar de vista)
 };
@@ -597,6 +598,99 @@ const KIND_META = {
   card:   { label: "Tarjeta", icon: "card" },
   other:  { label: "Otra",    icon: "wallet" },
 };
+
+/* --------------------------------------------------------------- direccion --
+   Un COBRO es una deuda vista desde el otro lado: los mismos movimientos, los
+   mismos comprobantes, la misma aritmetica. Lo unico que cambia son las
+   palabras, y viven todas aqui para no repartir "si es cobro entonces..." por
+   media app.
+
+     owe  -> yo debo:   me prestaron (loan sube), yo abono (payment baja)
+     owed -> me deben:  yo preste   (loan sube), me abonan (payment baja)
+-------------------------------------------------------------------------- */
+const SIDE = {
+  owe: {
+    tab: "Debo", nueva: "Nueva deuda", cosa: "deuda", cosas: "deudas",
+    lista: "Mis deudas", toca: "Lo que toca pagar", chip: "debo",
+    pagado: "pagado", loMio: "prestado", deMas: "Abonado",
+    hero: "Debo actualmente", heroTotal: "Debo en total", saldada: "Deuda saldada",
+    loan: "Préstamo", loanPlural: "Préstamos", payment: "Abono", paymentPlural: "Abonos",
+    loaned: "Prestado", paid: "Abonado", pending: "Por pagar",
+    quien: "¿Con quién es la deuda?", quienPh: "Mi hermano, Tarjeta Amex…",
+    otro: "Nombre de la persona o banco (opcional)",
+    ayudaNueva: "Aquí solo dices <b>con quién</b> es la deuda. <b>No necesitas saber el monto</b>: se va sumando solo con cada préstamo que registres dentro, y baja con cada abono.",
+    vacioAdmin: "Todavía no tienes ninguna deuda registrada.<br>Crea la primera: con tu hermano, una tarjeta, lo que sea.",
+    vacioNuevo: "Crear una deuda", primerMov: "Registrar el primer préstamo",
+    sinMovs: "Todavía no hay nada registrado.<br>Ve cargando los préstamos que te han hecho, uno por uno: el saldo se calcula solo.",
+    acuerdo: "Acuerdo de pago", acuerdoAyuda: "Si quedaste en abonar cada tanto, ponlo aquí y la app te avisa cuándo toca.",
+  },
+  owed: {
+    tab: "Me deben", nueva: "Nuevo cobro", cosa: "cobro", cosas: "cobros",
+    lista: "Lo que me deben", toca: "Lo que toca cobrar", chip: "me deben",
+    pagado: "cobrado", loMio: "que presté", deMas: "Pagado",
+    hero: "Me deben actualmente", heroTotal: "Me deben en total", saldada: "Cobro saldado",
+    loan: "Préstamo que hice", loanPlural: "Lo que presté", payment: "Pago recibido", paymentPlural: "Pagos recibidos",
+    loaned: "Presté", paid: "Me han pagado", pending: "Por cobrar",
+    quien: "¿Quién me debe?", quienPh: "Mi primo Carlos, don Luis…",
+    otro: "Nombre completo o dato de contacto (opcional)",
+    ayudaNueva: "Aquí solo dices <b>quién te debe</b>. <b>No necesitas saber el monto</b>: se va sumando con cada préstamo que registres, y baja con cada pago que recibas.",
+    vacioAdmin: "Todavía no tienes ningún cobro registrado.<br>Anota lo que te deben: un préstamo que hiciste, un trabajo sin pagar.",
+    vacioNuevo: "Registrar un cobro", primerMov: "Registrar el primer préstamo",
+    sinMovs: "Todavía no hay nada registrado.<br>Ve cargando lo que le prestaste, uno por uno: el saldo se calcula solo.",
+    acuerdo: "Acuerdo de cobro", acuerdoAyuda: "Si quedaron en que te pague cada tanto, ponlo aquí y la app te avisa cuándo toca.",
+  },
+};
+const dirOf = (d) => (d?.direction === "owed" ? "owed" : "owe");
+const flipDir = (x) => (x === "owed" ? "owe" : "owed");
+
+/* Y ahora lo importante: la MISMA deuda se cuenta al reves segun quien mire.
+
+   El dueño registra "le debo a mi hermano C$3,500". Su hermano, cuando entra a
+   verla, es el acreedor: para el eso es "me deben C$3,500", lo que presto y lo
+   que le han pagado. No son dos deudas ni dos registros: es la misma fila leida
+   desde el otro lado.
+
+   Por eso el vocabulario no depende solo de `direction`, sino de quien esta
+   mirando. El dueño ve la direccion tal cual; a un usuario de solo lectura se
+   le invierte. (Los cobros del dueño ni le llegan, ver lib/auth.js.) */
+const wordSide = (d) => (isAdmin() ? dirOf(d) : flipDir(dirOf(d)));
+const T = (d) => SIDE[wordSide(d)];
+const sideOf = () => SIDE[isAdmin() ? S.side : flipDir(S.side)];
+const debtsOf = (side) => (S.sum?.debts || []).filter((d) => dirOf(d) === side);
+
+/* ------------------------------------------------------------ recordatorio --
+   Con un acuerdo de pago cargado ("cada mes, C$500, desde el 15"), se calcula
+   la fecha que TOCA ahora: la primera del acuerdo que sea posterior al ultimo
+   pago recibido (o la primera de todas, si no hay ninguno). Si esa fecha ya
+   paso, esta vencido y se dice por cuantos dias.
+
+   No hay notificaciones push a proposito: una PWA no las tiene garantizadas en
+   iPhone y dependerian de un servicio aparte. El aviso vive en la pantalla y
+   se manda por WhatsApp, que es como se cobra de verdad.
+-------------------------------------------------------------------------- */
+const DUE_LABEL = { weekly: "Cada semana", biweekly: "Cada quincena", monthly: "Cada mes" };
+function nextDue(d) {
+  if (!d.dueEvery || !d.dueAmount || !d.dueFrom) return null;
+  const bal = d.currencies.reduce((a, c) => a + Math.max(0, d.totals[c].balance), 0);
+  if (bal <= 0) return null;                       // saldado: no hay nada que recordar
+  const hoy = todayApp();
+  const desde = d.lastPaymentDay && d.lastPaymentDay > d.dueFrom ? d.lastPaymentDay : null;
+  let day = d.dueFrom, i = 0;
+  // Se avanza hasta pasar el ultimo pago (o hasta hoy si nunca pago).
+  while (i++ < 600 && day <= (desde || shiftDays(hoy, -1))) {
+    day = d.dueEvery === "monthly" ? shiftMonths(d.dueFrom, i) : shiftDays(d.dueFrom, (d.dueEvery === "weekly" ? 7 : 14) * i);
+  }
+  const dias = daysBetween(hoy, day);
+  return { day, dias, vencido: dias < 0, amount: d.dueAmount, currency: d.currency };
+}
+function dueText(due) {
+  if (!due) return "";
+  if (due.vencido) return `Atrasado ${plural(-due.dias, "día", "días")}`;
+  if (due.dias === 0) return "Toca hoy";
+  if (due.dias === 1) return "Toca mañana";
+  if (due.dias <= 7) return `Toca en ${plural(due.dias, "día", "días")}`;
+  return `Toca el ${prettyDay(due.day)}`;
+}
 
 /* ===========================================================================
    Iconos y tema
@@ -887,18 +981,28 @@ async function refresh() {
   const debts = S.sum.debts;
   if (!debts.some((d) => d.id === S.debtId)) S.debtId = debts[0]?.id || null;
   if (S.debtId) localStorage.setItem("dd_debt", S.debtId); else localStorage.removeItem("dd_debt");
-  // Moneda del resumen: la que tenga mas deudas activas (empate: cordobas).
-  const activas = debts.filter((d) => d.active);
+  // El lado que se mira arranca donde haya algo (si no debo nada, en "me deben").
+  if (!debtsOf(S.side).some((d) => d.active)) {
+    const otro = S.side === "owe" ? "owed" : "owe";
+    if (debtsOf(otro).some((d) => d.active)) S.side = otro;
+  }
+  refreshCur();
+  paintHeader();
+}
+
+// Moneda del resumen: la que tenga mas deudas activas del lado actual
+// (empate: cordobas).
+function refreshCur() {
+  const activas = debtsOf(S.side).filter((d) => d.active);
   const cuenta = (c) => activas.filter((d) => d.currencies.includes(c)).length;
   const curs = [...new Set(activas.flatMap((d) => d.currencies))].sort((a, b) => cuenta(b) - cuenta(a) || (a === "NIO" ? -1 : 1));
   if (!curs.includes(S.homeCur)) S.homeCur = curs[0] || "NIO";
-  paintHeader();
 }
 
 function paintHeader() {
   const d = currentDebt();
   if (S.view === "debt" && d) {
-    $("headLbl").textContent = "Deuda";
+    $("headLbl").textContent = wordSide(d) === "owed" ? "Cobro" : "Deuda";
     $("headVal").textContent = d.name;
   } else {
     $("headLbl").textContent = { home: "Resumen", sim: "Simular pagos", settings: "Ajustes" }[S.view] || "Deudas";
@@ -923,12 +1027,14 @@ function setView(v) {
   if (v === "settings") renderSettings();
 }
 
-// Abre una deuda en su pestaña.
+// Abre una deuda (o un cobro) en su pestaña.
 function openDebt(id, tab = null) {
   S.debtId = id;
   localStorage.setItem("dd_debt", id);
   S.entries = null;
   if (tab) S.debtTab = tab;
+  const d = debtById(id);
+  if (d) S.side = d.direction === "owed" ? "owed" : "owe";
   setView("debt");
 }
 
@@ -1108,15 +1214,30 @@ const SERIES = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)",
    =========================================================================== */
 function renderHome() {
   if (!S.sum) return;
-  const debts = S.sum.debts.filter((d) => d.active);
-  const closed = S.sum.debts.filter((d) => !d.active);
   const body = $("homeBody");
+  const t = sideOf();
+  const delLado = debtsOf(S.side);
+  const debts = delLado.filter((d) => d.active);
+  const closed = delLado.filter((d) => !d.active);
+  // Las pestañas Debo / Me deben son solo del dueño: a quien entra de solo
+  // lectura se le comparte su deuda y nada mas, asi que ni las ve (y el
+  // servidor tampoco le manda los cobros).
+  const tabs = isAdmin() ? `
+    <div class="tabs" id="sideTabs" style="margin-top:14px;">
+      ${["owe", "owed"].map((k) => {
+        const n = debtsOf(k).filter((d) => d.active).length;
+        return `<button data-side="${k}" class="${S.side === k ? "on" : ""}">${SIDE[k].tab}${n ? ` <span class="cnt">${n}</span>` : ""}</button>`;
+      }).join("")}
+    </div>` : "";
+  const pintaTabs = () => $("sideTabs")?.querySelectorAll("[data-side]").forEach((b) =>
+    b.addEventListener("click", () => { S.side = b.dataset.side; S.homeCur = null; refreshCur(); renderHome(); }));
 
   if (!debts.length) {
-    body.innerHTML = isAdmin()
-      ? `<div class="card" style="margin-top:18px;">${emptyState("wallet", "Todavía no tienes ninguna deuda registrada.<br>Crea la primera: con tu hermano, una tarjeta, lo que sea.")}
-           <div class="pad" style="padding-top:0;"><button class="btn primary wide" id="homeNew">${icon("plus")}Crear una deuda</button></div></div>`
-      : `<div class="card" style="margin-top:18px;">${emptyState("eye", "Todavía no te compartieron ninguna deuda.<br>Cuando lo hagan, aparecerá aquí.")}</div>`;
+    body.innerHTML = tabs + (isAdmin()
+      ? `<div class="card" style="margin-top:14px;">${emptyState("wallet", t.vacioAdmin)}
+           <div class="pad" style="padding-top:0;"><button class="btn primary wide" id="homeNew">${icon("plus")}${t.vacioNuevo}</button></div></div>`
+      : `<div class="card" style="margin-top:14px;">${emptyState("eye", `Todavía no te compartieron ninguna ${t.cosa}.<br>Cuando lo hagan, aparecerá aquí.`)}</div>`);
+    pintaTabs();
     $("homeNew")?.addEventListener("click", () => debtForm(null));
     return;
   }
@@ -1138,8 +1259,9 @@ function renderHome() {
   const hayMovs = enCur.some((e) => mine.some((d) => d.id === e.debtId));
 
   const card = (d) => {
-    const c = debtCurOf(d, cur), t = d.totals[c];
+    const c = debtCurOf(d, cur), tt = d.totals[c];
     const saldada = d.entries > 0 && d.currencies.every((k) => d.totals[k].balance <= 0);
+    const due = nextDue(d);
     return `
     <button class="debt-card" data-debt="${d.id}">
       <div class="top">
@@ -1148,25 +1270,48 @@ function renderHome() {
           <div class="name ellip">${esc(d.name)}</div>
           <div class="who ellip">${esc(d.counterpart || KIND_META[d.kind]?.label || "")}${d.lastDay ? ` · último mov. ${prettyDay(d.lastDay)}` : " · sin movimientos"}</div>
         </div>
-        <div class="bal">${d.currencies.map((k) => `<b>${money(Math.max(0, d.totals[k].balance), k)}</b>`).join("")}<small>${saldada ? "saldada" : "debo"}</small></div>
+        <div class="bal">${d.currencies.map((k) => `<b>${money(Math.max(0, d.totals[k].balance), k)}</b>`).join("")}<small>${saldada ? "saldada" : t.chip}</small></div>
       </div>
-      <div class="meter"><i style="width:${pct(t.paid, t.loaned)}%"></i></div>
-      <div class="foot"><span>Prestado ${money(t.loaned, c)}</span><span>Abonado ${money(t.paid, c)} · ${pct(t.paid, t.loaned)}%</span></div>
+      <div class="meter"><i style="width:${pct(tt.paid, tt.loaned)}%"></i></div>
+      <div class="foot"><span>${t.loaned} ${money(tt.loaned, c)}</span><span>${t.paid} ${money(tt.paid, c)} · ${pct(tt.paid, tt.loaned)}%</span></div>
+      ${due ? `<div class="foot" style="margin-top:7px;"><span class="badge ${due.vencido ? "off" : due.dias <= 7 ? "warn" : ""}">${icon("calendar")} ${dueText(due)} · ${money(due.amount, due.currency)}</span></div>` : ""}
     </button>`;
   };
 
-  body.innerHTML = `
-    ${curs.length > 1 ? `<div class="chips" style="margin:16px 0 0;">${curs.map((c) => `<button class="chip ${c === cur ? "on" : ""}" data-cur="${c}">${CUR[c].sym} ${CUR[c].label}</button>`).join("")}</div>` : ""}
+  // Lo que toca pagar (o cobrar) pronto, arriba de todo: es lo unico que hay
+  // que hacer algo al respecto. Solo el dueño: al viewer no le llega el acuerdo
+  // de pago desde el servidor, asi que nextDue() le da null igual.
+  const pendientes = isAdmin()
+    ? debts.map((d) => ({ d, due: nextDue(d) })).filter((x) => x.due && x.due.dias <= 7).sort((a, b) => a.due.dias - b.due.dias)
+    : [];
+
+  body.innerHTML = tabs + `
+    ${curs.length > 1 ? `<div class="chips" style="margin:14px 0 0;">${curs.map((c) => `<button class="chip ${c === cur ? "on" : ""}" data-cur="${c}">${CUR[c].sym} ${CUR[c].label}</button>`).join("")}</div>` : ""}
     <div class="card hero" style="margin-top:14px;">
-      <div class="lbl">Debo en total${curs.length > 1 ? ` (${CUR[cur].label})` : ""}</div>
+      <div class="lbl">${t.heroTotal}${curs.length > 1 ? ` (${CUR[cur].label})` : ""}</div>
       <div class="val"><small>${CUR[cur].sym}</small>${nfMoney.format(Math.max(0, tot.balance))}</div>
-      <div class="sub">${plural(mine.length, "deuda", "deudas")} en ${CUR[cur].label} · ${pct(tot.paid, tot.loaned)}% pagado de lo prestado</div>
+      <div class="sub">${plural(mine.length, t.cosa, t.cosas)} en ${CUR[cur].label} · ${pct(tot.paid, tot.loaned)}% ${t.pagado} de lo ${t.loMio}</div>
     </div>
     <div class="tiles" style="margin-top:8px;">
-      <div class="tile"><div class="lbl">Prestado</div><div class="val">${money(tot.loaned, cur)}</div></div>
-      <div class="tile"><div class="lbl">Abonado</div><div class="val good">${money(tot.paid, cur)}</div></div>
-      <div class="tile"><div class="lbl">Por pagar</div><div class="val bad">${money(Math.max(0, tot.balance), cur)}</div></div>
+      <div class="tile"><div class="lbl">${t.loaned}</div><div class="val">${money(tot.loaned, cur)}</div></div>
+      <div class="tile"><div class="lbl">${t.paid}</div><div class="val good">${money(tot.paid, cur)}</div></div>
+      <div class="tile"><div class="lbl">${t.pending}</div><div class="val bad">${money(Math.max(0, tot.balance), cur)}</div></div>
     </div>
+
+    ${pendientes.length ? `
+    <h3>${t.toca}</h3>
+    <div class="card">
+      ${pendientes.map(({ d, due }) => `
+        <button class="list-item" data-debt="${d.id}">
+          ${icon("calendar")}
+          <div class="grow">
+            <div class="ellip"><b>${esc(d.name)}</b></div>
+            <div class="muted">${dueText(due)} · ${prettyDay(due.day, { year: true })}</div>
+          </div>
+          <b class="num">${money(due.amount, due.currency)}</b>
+          ${due.vencido ? '<span class="badge off">atrasado</span>' : ""}
+        </button>`).join("")}
+    </div>` : ""}
 
     ${hayMovs ? `
     <div class="card pad" style="margin-top:14px;">
@@ -1176,9 +1321,9 @@ function renderHome() {
       ${chartTable(labels, series)}
     </div>` : ""}
 
-    <div class="sec-head"><h2>Mis deudas</h2>${isAdmin() ? `<button class="btn sm" id="homeNew">${icon("plus")}Nueva</button>` : ""}</div>
+    <div class="sec-head"><h2>${t.lista}</h2>${isAdmin() ? `<button class="btn sm" id="homeNew">${icon("plus")}Nuevo</button>` : ""}</div>
     ${debts.map(card).join("")}
-    ${closed.length ? `<p class="muted" style="text-align:center; margin:4px 0 0;"><button class="link" style="font-weight:500; color:var(--muted);" id="homeClosed">Ver ${plural(closed.length, "deuda cerrada", "deudas cerradas")}</button></p>` : ""}
+    ${closed.length ? `<p class="muted" style="text-align:center; margin:4px 0 0;"><button class="link" style="font-weight:500; color:var(--muted);" id="homeClosed">Ver ${plural(closed.length, `${t.cosa} cerrada`, `${t.cosas} cerradas`)}</button></p>` : ""}
 
     ${S.sum.comments.length ? `
     <h3>Últimos comentarios</h3>
@@ -1194,6 +1339,7 @@ function renderHome() {
     </div>` : ""}`;
 
   if (hayMovs) lineChart($("homeChart"), { series, labels, fmtFull: (v) => money(v, cur) });
+  pintaTabs();
   body.querySelectorAll("[data-cur]").forEach((b) => b.addEventListener("click", () => { S.homeCur = b.dataset.cur; renderHome(); }));
   body.querySelectorAll("[data-debt]").forEach((b) => b.addEventListener("click", () => openDebt(Number(b.dataset.debt))));
   body.querySelectorAll("[data-cdebt]").forEach((b) => b.addEventListener("click", () => openDebt(Number(b.dataset.cdebt), "comments")));
@@ -1208,7 +1354,7 @@ async function loadDebt() {
   const d = currentDebt();
   const body = $("debtBody");
   if (!d) {
-    body.innerHTML = `<div class="card" style="margin-top:18px;">${emptyState("wallet", isAdmin() ? "No hay ninguna deuda abierta.<br>Créala desde el Resumen." : "Todavía no te compartieron ninguna deuda.")}</div>`;
+    body.innerHTML = `<div class="card" style="margin-top:18px;">${emptyState("wallet", isAdmin() ? "No hay nada abierto.<br>Créalo desde el Resumen." : "Todavía no te compartieron nada.")}</div>`;
     return;
   }
   if (!S.entries || S.entries.debtId !== d.id) {
@@ -1240,8 +1386,10 @@ function renderDebt() {
   const admin = isAdmin();
   const list = S.entries.list;
   const cur = debtCurOf(d, S.debtCur);
-  const t = d.totals[cur];
+  const tt = d.totals[cur];
   const varias = d.currencies.length > 1;
+  const t = T(d);                    // vocabulario: deuda ("debo") o cobro ("me deben")
+  const due = admin ? nextDue(d) : null;   // el acuerdo de pago es cosa del dueño
   // Comentarios sobre movimientos (los generales se ven al abrir la pestaña).
   const nComments = list.reduce((a, e) => a + e.comments, 0);
   const tab = S.debtTab;
@@ -1252,9 +1400,10 @@ function renderDebt() {
         <div class="row" style="gap:6px;"><h2 class="ellip" style="margin:0;">${esc(d.name)}</h2>${icon("chevdown", "")}</div>
         <div class="muted ellip">${esc(d.counterpart || KIND_META[d.kind]?.label || "")}${d.note ? ` · ${esc(d.note)}` : ""}</div>
       </button>
-      ${admin ? `<button class="btn sm" id="debtEdit" aria-label="Editar deuda">${icon("edit")}</button>` : ""}
+      ${admin ? `<button class="btn sm" id="debtEdit" aria-label="Editar">${icon("edit")}</button>` : ""}
     </div>
     <div class="chips" style="margin:8px 0 12px;">
+      ${admin ? `<span class="badge ${d.direction === "owed" ? "good" : ""}">${d.direction === "owed" ? "Me deben" : "Yo debo"}</span>` : ""}
       <span class="badge">${KIND_META[d.kind]?.label || d.kind}</span>
       ${varias ? "" : `<span class="badge">${CUR[cur].label}</span>`}
       ${d.interestRate ? `<span class="badge warn">${d.interestRate}% anual</span>` : ""}
@@ -1267,24 +1416,32 @@ function renderDebt() {
     </div>` : ""}
 
     <div class="card hero">
-      <div class="lbl">${t.balance <= 0 && t.loaned > 0 ? "Parte saldada" : "Debo actualmente"}${varias ? ` en ${CUR[cur].label}` : ""}</div>
-      <div class="val"><small>${CUR[cur].sym}</small>${nfMoney.format(Math.max(0, t.balance))}</div>
-      <div class="sub">${t.balance < 0 ? `Abonado de más: ${money(-t.balance, cur)} a favor` : `${pct(t.paid, t.loaned)}% pagado de ${money(t.loaned, cur)}`}${varias ? ` · también debo ${d.currencies.filter((c) => c !== cur).map((c) => money(Math.max(0, d.totals[c].balance), c)).join(" y ")}` : ""}</div>
+      <div class="lbl">${tt.balance <= 0 && tt.loaned > 0 ? "Parte saldada" : t.hero}${varias ? ` en ${CUR[cur].label}` : ""}</div>
+      <div class="val"><small>${CUR[cur].sym}</small>${nfMoney.format(Math.max(0, tt.balance))}</div>
+      <div class="sub">${tt.balance < 0
+        ? `${t.deMas} de más: ${money(-tt.balance, cur)} a favor`
+        : `${pct(tt.paid, tt.loaned)}% ${t.pagado} de ${money(tt.loaned, cur)}`}${varias ? ` · también ${t.chip} ${d.currencies.filter((c) => c !== cur).map((c) => money(Math.max(0, d.totals[c].balance), c)).join(" y ")}` : ""}</div>
     </div>
     <div class="tiles" style="margin-top:8px;">
-      <div class="tile"><div class="lbl">Prestado</div><div class="val">${money(t.loaned, cur)}</div></div>
-      <div class="tile"><div class="lbl">Abonado</div><div class="val good">${money(t.paid, cur)}</div></div>
+      <div class="tile"><div class="lbl">${t.loaned}</div><div class="val">${money(tt.loaned, cur)}</div></div>
+      <div class="tile"><div class="lbl">${t.paid}</div><div class="val good">${money(tt.paid, cur)}</div></div>
       <div class="tile"><div class="lbl">Movimientos</div><div class="val">${list.length}</div></div>
     </div>
 
+    ${due ? `
+      <div class="msg ${due.vencido ? "err" : due.dias <= 7 ? "warn" : "ok"}" style="display:flex; align-items:center; gap:8px;">
+        ${icon("calendar")}
+        <span class="grow"><b>${dueText(due)}</b> · ${money(due.amount, due.currency)} ${DUE_LABEL[d.dueEvery].toLowerCase()} · ${prettyDay(due.day, { year: true })}</span>
+      </div>` : ""}
+
     ${admin && d.active ? `
       <div class="actions">
-        <button class="btn danger" id="addLoan">${icon("up")}Préstamo</button>
-        <button class="btn good" id="addPay">${icon("down")}Abono</button>
+        <button class="btn danger" id="addLoan">${icon("up")}${t.loan}</button>
+        <button class="btn good" id="addPay">${icon("down")}${t.payment}</button>
       </div>` : `<div style="height:12px;"></div>`}
     <div class="row" style="gap:8px; margin-bottom:6px;">
       <button class="btn sm grow" id="pdfBtn">${icon("download")}Estado de cuenta</button>
-      <button class="btn sm grow" id="waBtn">${icon("whatsapp")}Resumen</button>
+      <button class="btn sm grow" id="waBtn">${icon("whatsapp")}${wordSide(d) === "owed" && due ? "Recordar" : "Resumen"}</button>
     </div>
 
     <div class="tabs" id="debtTabs">
@@ -1299,7 +1456,7 @@ function renderDebt() {
   $("addLoan")?.addEventListener("click", () => entryForm({ kind: "loan", currency: cur }));
   $("addPay")?.addEventListener("click", () => entryForm({ kind: "payment", currency: cur }));
   $("pdfBtn").addEventListener("click", statementScreen);
-  $("waBtn").addEventListener("click", () => shareTexto(resumenTexto(d, list)));
+  $("waBtn").addEventListener("click", () => shareTexto(resumenTexto(d, list, due)));
   $("debtTabs").querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { S.debtTab = b.dataset.tab; renderDebt(); }));
   $("debtCurs")?.querySelectorAll("[data-dc]").forEach((b) => b.addEventListener("click", () => { S.debtCur = b.dataset.dc; renderDebt(); }));
 
@@ -1310,11 +1467,11 @@ function renderDebt() {
 
 // Elegir otra deuda (las que veo).
 function pickDebt() {
-  const debts = S.sum.debts;
-  openModal(`
-    <h2>Mis deudas</h2>
-    <div class="card">
-      ${debts.map((d) => `
+  // Al viewer no le llegan cobros, asi que solo ve una lista, sin encabezados.
+  const grupo = (side) => {
+    const del = debtsOf(side);
+    if (!del.length) return "";
+    return `${isAdmin() ? `<h3>${SIDE[side].tab}</h3>` : ""}<div class="card">${del.map((d) => `
         <button class="list-item" data-d="${d.id}">
           ${icon(KIND_META[d.kind]?.icon || "wallet")}
           <div class="grow">
@@ -1323,30 +1480,31 @@ function pickDebt() {
           </div>
           <b class="num" style="text-align:right;">${balances(d, "<br>")}</b>
           ${d.id === S.debtId ? icon("check", "chev") : icon("chevron", "chev")}
-        </button>`).join("")}
-    </div>
-    ${isAdmin() ? `<button class="btn wide" id="pickNew" style="margin-top:12px;">${icon("plus")}Nueva deuda</button>` : ""}`);
+        </button>`).join("")}</div>`;
+  };
+  openModal(`
+    <h2>${isAdmin() ? "Deudas y cobros" : "Mis deudas"}</h2>
+    ${grupo("owe")}${grupo("owed")}
+    ${isAdmin() ? `<button class="btn wide" id="pickNew" style="margin-top:12px;">${icon("plus")}${sideOf().nueva}</button>` : ""}`);
   $("modalRoot").querySelectorAll("[data-d]").forEach((b) => b.addEventListener("click", () => { closeModal(); openDebt(Number(b.dataset.d)); }));
   $("pickNew")?.addEventListener("click", () => debtForm(null));
 }
 
 /* ------------------------------ movimientos ------------------------------ */
 function renderMoves(d, list) {
-  const f = S.moveFilter;
+  const f = S.moveFilter, t = T(d);
   const shown = list.filter((e) => f === "all" || e.kind === f);
   const run = withRunning(list);
   let html = `
     <div class="chips" style="margin-bottom:12px;">
-      ${[["all", "Todos"], ["loan", "Préstamos"], ["payment", "Abonos"]].map(([k, l]) => `<button class="chip ${f === k ? "on" : ""}" data-f="${k}">${l}</button>`).join("")}
+      ${[["all", "Todos"], ["loan", t.loanPlural], ["payment", t.paymentPlural]].map(([k, l]) => `<button class="chip ${f === k ? "on" : ""}" data-f="${k}">${l}</button>`).join("")}
     </div>`;
   if (!shown.length) {
-    // Deuda recien creada: se invita a cargar el primer prestamo aqui mismo.
-    // El monto de la deuda no se pide nunca: sale de sumar lo que se registre.
+    // Recien creada: se invita a cargar el primer prestamo aqui mismo. El monto
+    // total no se pide nunca: sale de sumar lo que se registre.
     const primera = !list.length && isAdmin() && d.active;
-    html += `<div class="card">${emptyState("list", list.length ? "Nada con ese filtro." : isAdmin()
-      ? "Todavía no hay nada registrado.<br>Ve cargando los préstamos que te han hecho, uno por uno: el saldo se calcula solo."
-      : "Sin movimientos todavía.")}
-      ${primera ? `<div class="pad" style="padding-top:0;"><button class="btn primary wide" id="firstLoan">${icon("up")}Registrar el primer préstamo</button></div>` : ""}</div>`;
+    html += `<div class="card">${emptyState("list", list.length ? "Nada con ese filtro." : isAdmin() ? t.sinMovs : "Sin movimientos todavía.")}
+      ${primera ? `<div class="pad" style="padding-top:0;"><button class="btn primary wide" id="firstLoan">${icon("up")}${t.primerMov}</button></div>` : ""}</div>`;
   } else {
     let mes = null;
     html += `<div class="card">`;
@@ -1357,7 +1515,7 @@ function renderMoves(d, list) {
         <button class="entry" data-e="${e.id}">
           <div class="dir ${e.kind}">${icon(e.kind === "loan" ? "up" : "down")}</div>
           <div class="grow">
-            <div class="what ellip">${esc(e.reason || (e.kind === "loan" ? "Préstamo" : "Abono"))}</div>
+            <div class="what ellip">${esc(e.reason || (e.kind === "loan" ? T(d).loan : T(d).payment))}</div>
             <div class="when">${prettyDay(e.day, { year: true })}${e.hasReceipt ? icon("image") : ""}${e.comments ? `<span class="row" style="gap:3px;">${icon("chat")}${e.comments}</span>` : ""}</div>
           </div>
           <div class="amt ${e.kind}">${e.kind === "loan" ? "+" : "−"}${money(e.amount, e.currency)}<small>saldo ${money(run.get(e.id), e.currency)}</small></div>
@@ -1375,9 +1533,10 @@ function renderDebtCharts(d, list, cur) {
   // Solo los movimientos de la moneda que se esta mirando: no se mezclan.
   list = list.filter((e) => e.currency === cur);
   if (!list.length) { $("debtTab").innerHTML = `<div class="card">${emptyState("chart", "Cuando haya movimientos, aquí se ven los gráficos.")}</div>`; return; }
+  const t = T(d);
   const months = lastMonths(12), labels = months.map(monthLabel);
   const flows = flowsByMonth(list, months);
-  const bars = [{ name: "Préstamos", color: SERIES[0], values: flows.loan }, { name: "Abonos", color: SERIES[2], values: flows.payment }];
+  const bars = [{ name: t.loanPlural, color: SERIES[0], values: flows.loan }, { name: t.paymentPlural, color: SERIES[2], values: flows.payment }];
   const bal = [{ name: "Saldo", color: SERIES[0], values: balanceByMonth(list, months) }];
   $("debtTab").innerHTML = `
     <div class="card pad">
@@ -1387,8 +1546,8 @@ function renderDebtCharts(d, list, cur) {
       ${chartTable(labels, bal, (v) => money(v, cur))}
     </div>
     <div class="card pad" style="margin-top:12px;">
-      <p class="chart-title">Préstamos y abonos por mes</p>
-      <p class="chart-sub">Cuánto entró y cuánto se pagó cada mes</p>
+      <p class="chart-title">${t.loanPlural} y ${t.paymentPlural.toLowerCase()} por mes</p>
+      <p class="chart-sub">Cuánto entró y cuánto se ${wordSide(d) === "owed" ? "cobró" : "pagó"} cada mes</p>
       <div id="chFlow"></div>
       ${chartTable(labels, bars, (v) => money(v, cur))}
     </div>`;
@@ -1401,12 +1560,12 @@ async function entryDetail(id) {
   const d = currentDebt();
   const e = S.entries?.list.find((x) => x.id === id);
   if (!d || !e) return;
-  const admin = isAdmin(), cur = e.currency;
+  const admin = isAdmin(), cur = e.currency, t = T(d);
   openModal(`
     <div class="row" style="gap:12px; margin-top:6px;">
       <div class="dir ${e.kind}" style="width:44px; height:44px; border-radius:999px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line); background:var(${e.kind === "loan" ? "--bad-bg" : "--ok-bg"}); color:var(${e.kind === "loan" ? "--bad" : "--ok"});">${icon(e.kind === "loan" ? "up" : "down")}</div>
       <div class="grow">
-        <div class="muted">${e.kind === "loan" ? "Préstamo" : "Abono"} · ${prettyDayLong(e.day)}</div>
+        <div class="muted">${e.kind === "loan" ? t.loan : t.payment} · ${prettyDayLong(e.day)}</div>
         <div style="font-size:26px; font-weight:600; letter-spacing:-.02em; color:var(${e.kind === "loan" ? "--bad" : "--ok"});">${e.kind === "loan" ? "+" : "−"}${money(e.amount, cur)}</div>
       </div>
     </div>
@@ -1427,7 +1586,7 @@ async function entryDetail(id) {
   `);
   $("edEdit")?.addEventListener("click", () => entryForm(e));
   $("edDel")?.addEventListener("click", async () => {
-    if (!(await ask({ title: "¿Borrar este movimiento?", text: `${e.kind === "loan" ? "Préstamo" : "Abono"} de ${money(e.amount, cur)} del ${prettyDay(e.day, { year: true })}. Se borran también su comprobante y sus comentarios.`, ok: "Borrar", danger: true }))) return;
+    if (!(await ask({ title: "¿Borrar este movimiento?", text: `${e.kind === "loan" ? t.loan : t.payment} de ${money(e.amount, cur)} del ${prettyDay(e.day, { year: true })}. Se borran también su comprobante y sus comentarios.`, ok: "Borrar", danger: true }))) return;
     try {
       await api(`/api/entries?id=${e.id}`, { method: "DELETE" });
       closeModal(); toast("Movimiento borrado");
@@ -1481,15 +1640,16 @@ function entryForm(e) {
   const isNew = !e.id;
   const kind = e.kind;
   const cur = e.currency || d.currency;
+  const t = T(d);
   let receipt = undefined;           // undefined = no tocar, null = quitar, string = nueva
   openModal(`
-    <h2>${isNew ? (kind === "loan" ? "Nuevo préstamo" : "Nuevo abono") : "Editar movimiento"}</h2>
+    <h2>${isNew ? `Nuevo: ${(kind === "loan" ? t.loan : t.payment).toLowerCase()}` : "Editar movimiento"}</h2>
     <p class="muted" style="margin:-6px 0 14px;">${esc(d.name)}</p>
     <form id="eForm" class="card pad">
       ${isNew ? "" : `
         <div class="seg" style="margin-bottom:14px;" id="eKind">
-          <button type="button" data-k="loan" class="${kind === "loan" ? "on" : ""}">${icon("up")}Préstamo</button>
-          <button type="button" data-k="payment" class="${kind === "payment" ? "on" : ""}">${icon("down")}Abono</button>
+          <button type="button" data-k="loan" class="${kind === "loan" ? "on" : ""}">${icon("up")}${t.loan}</button>
+          <button type="button" data-k="payment" class="${kind === "payment" ? "on" : ""}">${icon("down")}${t.payment}</button>
         </div>`}
       <div class="two">
         <label class="field"><span>Monto *</span><input id="eAmount" type="number" inputmode="decimal" step="0.01" min="0.01" required value="${e.amount ?? ""}" placeholder="0.00"></label>
@@ -1497,7 +1657,7 @@ function entryForm(e) {
           <select id="eCur">${Object.entries(CUR).map(([k, v]) => `<option value="${k}" ${cur === k ? "selected" : ""}>${v.sym} ${v.label}</option>`).join("")}</select></label>
       </div>
       <label class="field"><span>Fecha *</span><input id="eDay" type="date" required value="${e.day || todayApp()}" max="${shiftDays(todayApp(), 1)}"></label>
-      <label class="field"><span>Motivo</span><input id="eReason" maxlength="120" value="${esc(e.reason || "")}" placeholder="${kind === "loan" ? "Para la moto, universidad, emergencia…" : "Abono de marzo, transferencia…"}"></label>
+      <label class="field"><span>Motivo</span><input id="eReason" maxlength="120" value="${esc(e.reason || "")}" placeholder="${kind === "loan" ? "Para la moto, universidad, emergencia…" : wordSide(d) === "owed" ? "Pago de marzo, me transfirió…" : "Abono de marzo, transferencia…"}"></label>
       <label class="field"><span>Nota (opcional)</span><textarea id="eNote" maxlength="500" placeholder="Cualquier detalle que convenga recordar">${esc(e.note || "")}</textarea></label>
       <div class="field">
         <span>Comprobante (captura o foto)</span>
@@ -1543,7 +1703,7 @@ function entryForm(e) {
     try {
       if (isNew) await api("/api/entries", { method: "POST", body: { ...body, debtId: d.id, kind } });
       else await api(`/api/entries?id=${e.id}`, { method: "PUT", body: { ...body, kind: curKind } });
-      closeModal(); toast(isNew ? (kind === "loan" ? "Préstamo registrado" : "Abono registrado") : "Guardado");
+      closeModal(); toast(isNew ? `${kind === "loan" ? t.loan : t.payment} registrado` : "Guardado");
       S.entries = null; await refresh(); loadDebt();
     } catch (err) { showErr("eMsg", err); btn.disabled = false; }
   });
@@ -1650,11 +1810,12 @@ function simulate({ balance, amount, freq, start, rate }) {
 }
 
 function renderSim() {
-  // Una opcion por deuda Y moneda con saldo: cada parte se paga por su lado.
+  // Una opcion por deuda/cobro Y moneda con saldo: cada parte se paga por su
+  // lado. Sirve igual para planear lo que pago y lo que espero cobrar.
   const opts = (S.sum?.debts || []).filter((d) => d.active)
     .flatMap((d) => d.currencies.filter((c) => d.totals[c].balance > 0).map((c) => ({ debt: d, cur: c, balance: d.totals[c].balance, key: `${d.id}-${c}` })));
   const body = $("simBody");
-  if (!opts.length) { body.innerHTML = `<div class="card">${emptyState("calc", "No hay deudas con saldo para simular.")}</div>`; return; }
+  if (!opts.length) { body.innerHTML = `<div class="card">${emptyState("calc", "No hay nada con saldo para simular.")}</div>`; return; }
   const sc = S.simScen && opts.some((o) => o.key === S.simScen.key) ? S.simScen : null;
   const o0 = sc ? opts.find((o) => o.key === sc.key) : (opts.find((o) => o.debt.id === S.debtId) || opts[0]);
   const sugerido = (o) => Math.max(1, Math.round(o.balance / 12 / (o.cur === "USD" ? 1 : 10)) * (o.cur === "USD" ? 1 : 10));
@@ -1666,16 +1827,16 @@ function renderSim() {
   const o = opts.find((x) => x.key === st.key), d = o.debt, cur = o.cur;
 
   body.innerHTML = `
-    <div class="chips" style="margin-bottom:12px;">${opts.map((x) => `<button class="chip ${x.key === st.key ? "on" : ""}" data-sd="${x.key}">${esc(x.debt.name)} · ${money(x.balance, x.cur)}</button>`).join("")}</div>
+    <div class="chips" style="margin-bottom:12px;">${opts.map((x) => `<button class="chip ${x.key === st.key ? "on" : ""}" data-sd="${x.key}">${wordSide(x.debt) === "owed" ? "↓ " : ""}${esc(x.debt.name)} · ${money(x.balance, x.cur)}</button>`).join("")}</div>
     <div class="card pad">
       <div class="two">
-        <label class="field"><span>Cada cuánto pago</span>
+        <label class="field"><span>${wordSide(d) === "owed" ? "Cada cuánto me paga" : "Cada cuánto pago"}</span>
           <select id="simFreq">${Object.entries(FREQS).map(([k, v]) => `<option value="${k}" ${st.freq === k ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
         <label class="field"><span>Primer pago</span><input type="date" id="simStart" value="${st.start}"></label>
       </div>
       <label class="field"><span>Interés anual (%)</span><input type="number" id="simRate" inputmode="decimal" min="0" max="200" step="0.1" value="${st.rate}">
         <small class="hint">${d.interestRate ? `La deuda tiene ${d.interestRate}% registrado.` : "Déjalo en 0 si no cobra interés (lo normal entre familia)."}</small></label>
-      <div class="field"><span>Cuánto abono cada vez (${CUR[cur].sym}) — hasta 3 escenarios para comparar</span>
+      <div class="field"><span>${wordSide(d) === "owed" ? "Cuánto me abona cada vez" : "Cuánto abono cada vez"} (${CUR[cur].sym}) — hasta 3 escenarios para comparar</span>
         <div id="simAmounts">${st.amounts.map((a, i) => `
           <div class="scen"><i style="background:${SERIES[i]}"></i><input type="number" inputmode="decimal" min="1" step="1" value="${a}" data-i="${i}" class="simAmt" style="padding:10px 12px; border:1px solid var(--line-2); border-radius:var(--r-sm); background:var(--card); min-height:44px;">
             ${st.amounts.length > 1 ? `<button type="button" class="x" data-rm="${i}" aria-label="Quitar">${icon("cross")}</button>` : ""}</div>`).join("")}</div>
@@ -1721,12 +1882,12 @@ function simOut(o, st) {
   out.innerHTML = `
     ${scen.map((s, i) => !s.r ? "" : `
       <div class="card pad" style="margin-top:12px; border-left:3px solid ${s.color};">
-        <div class="row"><b class="grow">Abonando ${money(s.amount, cur)} ${f.label.toLowerCase()}</b>${st.amounts.length > 1 ? `<span class="badge">escenario ${i + 1}</span>` : ""}</div>
+        <div class="row"><b class="grow">${wordSide(o.debt) === "owed" ? "Recibiendo" : "Abonando"} ${money(s.amount, cur)} ${f.label.toLowerCase()}</b>${st.amounts.length > 1 ? `<span class="badge">escenario ${i + 1}</span>` : ""}</div>
         ${s.r.never ? `<div class="msg warn" style="margin-bottom:0;">Con ese monto la deuda no baja: el abono no cubre ni el interés del período. Sube el monto.</div>` : `
         <div class="sim-result" style="margin-bottom:0;">
           <div class="tile"><div class="lbl">Termina</div><div class="val">${prettyDay(s.r.end, { year: true })}</div></div>
           <div class="tile"><div class="lbl">Pagos</div><div class="val">${s.r.n} · ${tiempoHumano(st.start, s.r.end)}</div></div>
-          <div class="tile"><div class="lbl">Total pagado</div><div class="val">${money(s.r.paid, cur)}</div></div>
+          <div class="tile"><div class="lbl">${wordSide(o.debt) === "owed" ? "Total a recibir" : "Total pagado"}</div><div class="val">${money(s.r.paid, cur)}</div></div>
           <div class="tile"><div class="lbl">Intereses</div><div class="val ${s.r.interest > 0 ? "bad" : ""}">${money(s.r.interest, cur)}</div></div>
         </div>`}
       </div>`).join("")}
@@ -1784,7 +1945,7 @@ function renderSettings() {
 
     <h3>Deudas</h3>
     <div class="card">
-      ${item("debts", "wallet", admin ? "Administrar deudas" : "Ver mis deudas", `<span class="muted">${(S.sum?.debts || []).length}</span>`)}
+      ${item("debts", "wallet", admin ? "Administrar deudas y cobros" : "Ver mis deudas", `<span class="muted">${(S.sum?.debts || []).length}</span>`)}
       ${admin ? item("users", "people", "Usuarios con acceso") : ""}
     </div>
 
@@ -1828,20 +1989,20 @@ async function debtsScreen() {
   try { ({ debts } = await api("/api/debts?all=1")); } catch (err) { return toast(err.message, "err"); }
   const admin = isAdmin();
   openModal(`
-    <h2>${admin ? "Administrar deudas" : "Mis deudas"}</h2>
+    <h2>${admin ? "Deudas y cobros" : "Mis deudas"}</h2>
     <div class="card">
       ${debts.length ? debts.map((d) => `
         <button class="list-item" data-d="${d.id}">
           ${icon(KIND_META[d.kind]?.icon || "wallet")}
           <div class="grow">
             <div class="ellip"><b>${esc(d.name)}</b>${d.active ? "" : ' <span class="badge off">cerrada</span>'}</div>
-            <div class="muted ellip">${esc(d.counterpart || KIND_META[d.kind]?.label)}${admin ? ` · ${plural(d.viewers, "persona", "personas")} con acceso` : ""}</div>
+            <div class="muted ellip">${admin ? `${d.direction === "owed" ? "Me deben" : "Yo debo"}${d.counterpart ? ` · ${esc(d.counterpart)}` : ""} · ${plural(d.viewers, "persona", "personas")} con acceso` : esc(d.counterpart || KIND_META[d.kind]?.label || "")}</div>
           </div>
           <b class="num" style="text-align:right;">${balances(d, "<br>")}</b>
           ${icon("chevron", "chev")}
-        </button>`).join("") : emptyState("wallet", "Sin deudas.")}
+        </button>`).join("") : emptyState("wallet", "Sin deudas ni cobros.")}
     </div>
-    ${admin ? `<button class="btn primary wide" id="newDebt" style="margin-top:12px;">${icon("plus")}Nueva deuda</button>` : ""}`);
+    ${admin ? `<button class="btn primary wide" id="newDebt" style="margin-top:12px;">${icon("plus")}${sideOf().nueva}</button>` : ""}`);
   $("modalRoot").querySelectorAll("[data-d]").forEach((b) => b.addEventListener("click", () => {
     const d = debts.find((x) => x.id === Number(b.dataset.d));
     if (admin) debtForm(d); else { closeModal(); openDebt(d.id); }
@@ -1851,13 +2012,20 @@ async function debtsScreen() {
 
 function debtForm(d) {
   const isNew = !d;
+  // Al crear, el lado que se esta mirando decide si es deuda o cobro; se puede
+  // cambiar con el selector de arriba.
+  const dir0 = isNew ? S.side : (d.direction === "owed" ? "owed" : "owe");
+  const t = SIDE[dir0];
   openModal(`
-    <h2>${isNew ? "Nueva deuda" : esc(d.name)}</h2>
-    <p class="muted" style="margin:-6px 0 14px;">${isNew
-      ? "Aquí solo dices <b>con quién</b> es la deuda. <b>No necesitas saber el monto</b>: se va sumando solo con cada préstamo que registres dentro, y baja con cada abono."
-      : "Los préstamos y abonos se registran desde la pantalla de la deuda, no aquí."}</p>
+    <h2>${isNew ? t.nueva : esc(d.name)}</h2>
+    <p class="muted" style="margin:-6px 0 14px;" id="dHelp">${isNew ? t.ayudaNueva
+      : `Los ${t.loanPlural.toLowerCase()} y ${t.paymentPlural.toLowerCase()} se registran desde la pantalla anterior, no aquí.`}</p>
     <form id="dForm" class="card pad">
-      <label class="field"><span>¿Con quién es la deuda? *</span><input id="dName" required maxlength="80" value="${esc(d?.name || "")}" placeholder="Mi hermano, Tarjeta Amex…"></label>
+      <div class="seg" style="margin-bottom:14px;" id="dDir">
+        <button type="button" data-dir="owe" class="${dir0 === "owe" ? "on" : ""}">${icon("up")}Yo debo</button>
+        <button type="button" data-dir="owed" class="${dir0 === "owed" ? "on" : ""}">${icon("down")}Me deben</button>
+      </div>
+      <label class="field"><span id="dNameLbl">${t.quien} *</span><input id="dName" required maxlength="80" value="${esc(d?.name || "")}" placeholder="${t.quienPh}"></label>
       <div class="two">
         <label class="field"><span>Tipo</span>
           <select id="dKind">${Object.entries(KIND_META).map(([k, v]) => `<option value="${k}" ${(d?.kind || "person") === k ? "selected" : ""}>${v.label}</option>`).join("")}</select></label>
@@ -1865,32 +2033,68 @@ function debtForm(d) {
           <select id="dCur">${Object.entries(CUR).map(([k, v]) => `<option value="${k}" ${(d?.currency || "NIO") === k ? "selected" : ""}>${v.sym} ${v.label}</option>`).join("")}</select>
           <small class="hint">Cada movimiento puede ir en otra moneda; esta es la que se propone.</small></label>
       </div>
-      <label class="field"><span>Nombre de la persona o banco (opcional)</span><input id="dWho" maxlength="80" value="${esc(d?.counterpart || "")}" placeholder="Juan, Banco LAFISE…"></label>
+      <label class="field"><span id="dWhoLbl">${t.otro}</span><input id="dWho" maxlength="80" value="${esc(d?.counterpart || "")}" placeholder="Juan, Banco LAFISE…"></label>
+
+      <h3 style="margin:18px 0 8px;" id="dDueTitle">${t.acuerdo}</h3>
+      <p class="muted" style="margin:0 0 10px;" id="dDueHelp">${t.acuerdoAyuda}</p>
+      <label class="field"><span>Cada cuánto</span>
+        <select id="dDueEvery">
+          <option value="" ${d?.dueEvery ? "" : "selected"}>Sin acuerdo fijo</option>
+          ${Object.entries(DUE_LABEL).map(([k, v]) => `<option value="${k}" ${d?.dueEvery === k ? "selected" : ""}>${v}</option>`).join("")}
+        </select></label>
+      <div class="two" id="dDueBox">
+        <label class="field"><span>Cuánto cada vez</span><input id="dDueAmount" type="number" inputmode="decimal" min="0.01" step="0.01" value="${d?.dueAmount ?? ""}" placeholder="500"></label>
+        <label class="field"><span>Primer pago</span><input id="dDueFrom" type="date" value="${d?.dueFrom || todayApp()}"></label>
+      </div>
+
       <label class="field"><span>Interés anual (%)</span><input id="dRate" type="number" inputmode="decimal" min="0" max="200" step="0.01" value="${d?.interestRate ?? ""}" placeholder="0">
         <small class="hint">Solo para el simulador; el saldo registrado no cambia solo. Entre familia normalmente va vacío.</small></label>
       <label class="field"><span>Nota</span><textarea id="dNote" maxlength="300" placeholder="Acuerdos, fecha límite, lo que haga falta recordar">${esc(d?.note || "")}</textarea></label>
-      ${isNew ? "" : `<label class="row" style="margin-bottom:12px; gap:8px;"><input type="checkbox" id="dActive" ${d.active ? "checked" : ""} style="width:20px; height:20px;"><span>Deuda abierta</span><small class="muted" style="margin-left:auto;">cerrada = saldada o archivada</small></label>`}
+      ${isNew ? "" : `<label class="row" style="margin-bottom:12px; gap:8px;"><input type="checkbox" id="dActive" ${d.active ? "checked" : ""} style="width:20px; height:20px;"><span id="dActiveLbl">${dir0 === "owed" ? "Cobro abierto" : "Deuda abierta"}</span><small class="muted" style="margin-left:auto;">cerrada = saldada o archivada</small></label>`}
       <div id="dMsg"></div>
       <button class="btn primary wide" type="submit">${isNew ? "Crear" : "Guardar"}</button>
     </form>
     ${isNew ? "" : `<button class="btn danger wide" id="dDel" style="margin-top:10px;">${icon("trash")}Borrar definitivamente</button>`}`);
+
+  // El selector de dirección reescribe los textos: es la misma ficha, contada
+  // desde el otro lado.
+  let dir = dir0;
+  const pintaDir = () => {
+    const s = SIDE[dir];
+    $("dDir").querySelectorAll("[data-dir]").forEach((b) => b.classList.toggle("on", b.dataset.dir === dir));
+    $("dNameLbl").textContent = `${s.quien} *`;
+    $("dName").placeholder = s.quienPh;
+    $("dWhoLbl").textContent = s.otro;
+    $("dDueTitle").textContent = s.acuerdo;
+    $("dDueHelp").textContent = s.acuerdoAyuda;
+    if (isNew) $("dHelp").innerHTML = s.ayudaNueva;
+    if ($("dActiveLbl")) $("dActiveLbl").textContent = dir === "owed" ? "Cobro abierto" : "Deuda abierta";
+  };
+  $("dDir").querySelectorAll("[data-dir]").forEach((b) => b.addEventListener("click", () => { dir = b.dataset.dir; pintaDir(); }));
+  pintaDir();
+  const syncDue = () => $("dDueBox").classList.toggle("hidden", !$("dDueEvery").value);
+  $("dDueEvery").addEventListener("change", syncDue); syncDue();
+
   $("dForm").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const body = { name: $("dName").value, kind: $("dKind").value, currency: $("dCur").value, counterpart: $("dWho").value, interestRate: $("dRate").value, note: $("dNote").value };
+    const body = { name: $("dName").value, kind: $("dKind").value, currency: $("dCur").value, direction: dir,
+      counterpart: $("dWho").value, interestRate: $("dRate").value, note: $("dNote").value,
+      dueEvery: $("dDueEvery").value, dueAmount: $("dDueAmount").value, dueFrom: $("dDueFrom").value };
     if (!isNew) body.active = $("dActive").checked;
     try {
       const r = isNew ? await api("/api/debts", { method: "POST", body }) : await api(`/api/debts?id=${d.id}`, { method: "PUT", body });
-      closeModal(); toast(isNew ? "Deuda creada. Ahora registra los préstamos." : "Guardado");
+      closeModal(); toast(isNew ? `${dir === "owed" ? "Cobro" : "Deuda"} creado. Ahora registra los préstamos.` : "Guardado");
       S.entries = null;
+      S.side = dir;
       await refresh();
       if (isNew) openDebt(r.debt.id, "moves"); else setView(S.view);
     } catch (err) { showErr("dMsg", err); }
   });
   $("dDel")?.addEventListener("click", async () => {
-    if (!(await ask({ title: `¿Borrar "${d.name}"?`, text: `Se borran sus ${plural(d.entries, "movimiento", "movimientos")}, comprobantes y comentarios. No se puede deshacer. Si solo quieres dejar de verla, ciérrala en vez de borrarla.`, ok: "Borrar todo", danger: true }))) return;
+    if (!(await ask({ title: `¿Borrar "${d.name}"?`, text: `Se borran sus ${plural(d.entries, "movimiento", "movimientos")}, comprobantes y comentarios. No se puede deshacer. Si solo quieres dejar de verlo, ciérralo en vez de borrarlo.`, ok: "Borrar todo", danger: true }))) return;
     try {
       await api(`/api/debts?id=${d.id}&hard=1`, { method: "DELETE" });
-      closeModal(); toast("Deuda borrada");
+      closeModal(); toast(dir === "owed" ? "Cobro borrado" : "Deuda borrada");
       S.entries = null; await refresh(); setView("home");
     } catch (err) { toast(err.message, "err"); }
   });
@@ -1902,13 +2106,13 @@ async function usersScreen() {
   try { ({ users } = await api("/api/auth")); } catch (err) { return toast(err.message, "err"); }
   openModal(`
     <h2>Usuarios con acceso</h2>
-    <p class="muted" style="margin:-6px 0 12px;">Quien entra a ver tus deudas. Un usuario de <b>solo lectura</b> ve únicamente las deudas que le asignes y puede comentar, nada más.</p>
+    <p class="muted" style="margin:-6px 0 12px;">Quien entra a ver tus cuentas. Un usuario de <b>solo lectura</b> ve únicamente lo que le asignes y puede comentar, nada más.</p>
     <div class="card">
       ${users.map((u) => `
         <button class="list-item" data-u="${u.id}">
           <div class="grow">
             <div class="ellip"><b>${esc(u.name)}</b>${u.active ? "" : ' <span class="badge off">inactivo</span>'}</div>
-            <div class="muted ellip">${esc(u.fullName || "—")}${u.role === "admin" ? " · todas las deudas" : " · " + plural((u.debtIds || []).length, "deuda", "deudas")}</div>
+            <div class="muted ellip">${esc(u.fullName || "—")}${u.role === "admin" ? " · todo" : " · " + plural((u.debtIds || []).length, "cuenta asignada", "cuentas asignadas")}</div>
           </div>
           <span class="badge ${u.role === "admin" ? "admin" : ""}">${u.role === "admin" ? "Dueño" : "Lectura"}</span>
           ${u.id === S.me.id ? "" : icon("chevron", "chev")}
@@ -1932,18 +2136,18 @@ function userForm(u) {
       <label class="field"><span>Nombre</span><input id="uFull" value="${esc(u?.fullName || "")}" maxlength="80"></label>
       <label class="field"><span>Permisos</span>
         <select id="uRole">
-          <option value="viewer" ${u?.role !== "admin" ? "selected" : ""}>Solo lectura — ve las deudas que le asigne y comenta</option>
+          <option value="viewer" ${u?.role !== "admin" ? "selected" : ""}>Solo lectura — ve lo que le asigne y comenta</option>
           <option value="admin" ${u?.role === "admin" ? "selected" : ""}>Dueño — ve y edita todo, igual que yo</option>
         </select></label>
       <div class="field" id="uDebtsBox">
-        <span>Deudas que puede ver</span>
+        <span>Qué puede ver (deudas y cobros)</span>
         <div class="card">
           ${debts.length ? debts.map((d) => `
             <label class="list-item" style="cursor:pointer;">
               <input type="checkbox" class="uDebt" value="${d.id}" style="width:20px; height:20px;" ${(u?.debtIds || []).includes(d.id) || (isNew && d.id === S.debtId) ? "checked" : ""}>
-              <span class="grow ellip">${esc(d.name)}${d.active ? "" : ' <span class="badge off">cerrada</span>'}</span>
-              <span class="muted" style="text-align:right;">${balances(d, "<br>")}</span>
-            </label>`).join("") : emptyState("wallet", "Primero crea una deuda.")}
+              <span class="grow ellip">${esc(d.name)} <span class="badge ${d.direction === "owed" ? "good" : ""}">${d.direction === "owed" ? "me deben" : "debo"}</span>${d.active ? "" : ' <span class="badge off">cerrada</span>'}</span>
+                <span class="muted" style="text-align:right;">${balances(d, "<br>")}</span>
+            </label>`).join("") : emptyState("wallet", "Primero crea una deuda o un cobro.")}
         </div>
         <small class="hint">Sin ninguna marcada no verá nada.</small>
       </div>
@@ -2141,10 +2345,14 @@ function statementPdf(d, list, receipts) {
     doc.text(PM, 842 - 32, `Generado el ${prettyDay(hoy, { year: true })} · ${S.account?.name || "Deudas"}`, { size: 7.5, gray: 0.55 });
     doc.text(595 - PM, 842 - 32, `Página ${pag}`, { size: 7.5, gray: 0.55, align: "right" });
   };
+  const t = T(d);
   // Cabecera.
   doc.text(PM, PM + 6, S.account?.name || "Deudas", { size: 9, gray: 0.45 });
   doc.text(PM, PM + 30, `Estado de cuenta: ${d.name}`, { size: 18, bold: true });
-  doc.text(PM, PM + 47, [d.counterpart ? `A: ${d.counterpart}` : null, KIND_META[d.kind]?.label, d.interestRate ? `${d.interestRate}% anual` : null].filter(Boolean).join("  ·  "), { size: 9.5, gray: 0.4 });
+  const cobro = wordSide(d) === "owed";
+  doc.text(PM, PM + 47, [cobro ? "Me deben" : "Yo debo",
+    d.counterpart ? (cobro ? `Deudor: ${d.counterpart}` : `A: ${d.counterpart}`) : null,
+    KIND_META[d.kind]?.label, d.interestRate ? `${d.interestRate}% anual` : null].filter(Boolean).join("  ·  "), { size: 9.5, gray: 0.4 });
   doc.line(PM, PM + 58, 595 - PM, PM + 58);
   let y = PM + 84;
   const cols = { fecha: PM, det: PM + 62, pres: 595 - PM - 200, abo: 595 - PM - 100, saldo: 595 - PM };
@@ -2152,19 +2360,19 @@ function statementPdf(d, list, receipts) {
   const head = () => {
     doc.text(cols.fecha, y, "FECHA", { size: 7.5, gray: 0.5, bold: true });
     doc.text(cols.det, y, "DETALLE", { size: 7.5, gray: 0.5, bold: true });
-    doc.text(cols.pres, y, "PRÉSTAMO", { size: 7.5, gray: 0.5, bold: true, align: "right" });
-    doc.text(cols.abo, y, "ABONO", { size: 7.5, gray: 0.5, bold: true, align: "right" });
+    doc.text(cols.pres, y, cobro ? "PRESTÉ" : "PRÉSTAMO", { size: 7.5, gray: 0.5, bold: true, align: "right" });
+    doc.text(cols.abo, y, cobro ? "ME PAGÓ" : "ABONO", { size: 7.5, gray: 0.5, bold: true, align: "right" });
     doc.text(cols.saldo, y, "SALDO", { size: 7.5, gray: 0.5, bold: true, align: "right" });
     y += 6; doc.line(PM, y, 595 - PM, y, { gray: 0.7 }); y += 15;
   };
 
   // Una seccion por moneda: los saldos nunca se mezclan.
   for (const cur of d.currencies) {
-    const t = d.totals[cur];
+    const tt = d.totals[cur];
     const asc = cronologico(list.filter((e) => e.currency === cur));
     salto(220);
     if (d.currencies.length > 1) { doc.text(PM, y, `En ${CUR[cur].label}`, { size: 12, bold: true }); y += 20; }
-    const tiles = [["Prestado", money(t.loaned, cur)], ["Abonado", money(t.paid, cur)], ["Saldo actual", money(Math.max(0, t.balance), cur)]];
+    const tiles = [[t.loaned, money(tt.loaned, cur)], [t.paid, money(tt.paid, cur)], ["Saldo actual", money(Math.max(0, tt.balance), cur)]];
     const tw = (595 - 2 * PM - 20) / 3;
     tiles.forEach(([l, v], i) => {
       const x = PM + i * (tw + 10);
@@ -2179,7 +2387,7 @@ function statementPdf(d, list, receipts) {
       if (salto(70)) head();
       bal += e.kind === "loan" ? e.amount : -e.amount;
       doc.text(cols.fecha, y, prettyDay(e.day, { year: true }), { size: 9, gray: 0.35 });
-      doc.text(cols.det, y, fitText((e.reason || (e.kind === "loan" ? "Préstamo" : "Abono")) + (e.hasReceipt ? " *" : ""), 9, cols.pres - cols.det - 70), { size: 9 });
+      doc.text(cols.det, y, fitText((e.reason || (e.kind === "loan" ? t.loan : t.payment)) + (e.hasReceipt ? " *" : ""), 9, cols.pres - cols.det - 70), { size: 9 });
       if (e.kind === "loan") doc.text(cols.pres, y, money(e.amount, cur), { size: 9, align: "right" });
       else doc.text(cols.abo, y, money(e.amount, cur), { size: 9, align: "right" });
       doc.text(cols.saldo, y, money(bal, cur), { size: 9, align: "right", bold: true });
@@ -2187,7 +2395,7 @@ function statementPdf(d, list, receipts) {
     }
     if (!asc.length) { doc.text(PM, y, "Sin movimientos.", { size: 9, gray: 0.5 }); y += 18; }
     y += 6;
-    doc.text(cols.saldo, y, `Saldo: ${money(Math.max(0, t.balance), cur)}`, { size: 11, bold: true, align: "right" });
+    doc.text(cols.saldo, y, `Saldo: ${money(Math.max(0, tt.balance), cur)}`, { size: 11, bold: true, align: "right" });
     y += 30;
   }
   if (list.some((e) => e.hasReceipt)) doc.text(PM, y - 30, receipts ? "* con comprobante adjunto al final" : "* con comprobante (disponible en la app)", { size: 8, gray: 0.5 });
@@ -2197,7 +2405,7 @@ function statementPdf(d, list, receipts) {
     const bin = dataUriToBinary(r.image), size = bin && jpegSize(bin);
     if (!size) continue;
     doc.newPage(); pag++;
-    doc.text(PM, PM + 6, `Comprobante · ${r.entry.kind === "loan" ? "Préstamo" : "Abono"} de ${money(r.entry.amount, r.entry.currency)} · ${prettyDay(r.entry.day, { year: true })}`, { size: 10, bold: true });
+    doc.text(PM, PM + 6, `Comprobante · ${r.entry.kind === "loan" ? t.loan : t.payment} de ${money(r.entry.amount, r.entry.currency)} · ${prettyDay(r.entry.day, { year: true })}`, { size: 10, bold: true });
     if (r.entry.reason) doc.text(PM, PM + 22, r.entry.reason, { size: 9, gray: 0.4 });
     doc.drawImage(doc.addImage({ bin, ...size }), PM, PM + 36, 595 - 2 * PM, 842 - PM - 80 - PM);
     footer();
@@ -2246,15 +2454,26 @@ async function sharePdf(blob, name) {
 }
 // wa.me abre WhatsApp con el texto ya escrito y deja elegir el contacto.
 function shareTexto(texto) { window.open("https://wa.me/?text=" + encodeURIComponent(texto), "_blank", "noopener"); }
-function resumenTexto(d, list) {
-  const ult = [...list].slice(0, 5).map((e) => `${e.kind === "loan" ? "＋" : "－"} ${prettyDay(e.day)} · ${e.reason || (e.kind === "loan" ? "Préstamo" : "Abono")} · ${money(e.amount, e.currency)}`);
+// Texto para WhatsApp. En un COBRO se escribe para mandárselo a quien debe, y
+// si hay un pago pendiente arranca con el recordatorio: es justo el mensaje que
+// uno no sabe cómo empezar.
+function resumenTexto(d, list, due = null) {
+  const t = T(d);
+  const ult = [...list].slice(0, 5).map((e) => `${e.kind === "loan" ? "＋" : "－"} ${prettyDay(e.day)} · ${e.reason || (e.kind === "loan" ? t.loan : t.payment)} · ${money(e.amount, e.currency)}`);
   const varias = d.currencies.length > 1;
+  const cobro = wordSide(d) === "owed";
+  const recordatorio = cobro && due
+    ? [due.vencido
+        ? `Hola${d.counterpart ? ` ${d.counterpart.split(" ")[0]}` : ""}, te escribo por el pago de ${money(due.amount, due.currency)} que quedó para el ${prettyDay(due.day, { year: true })} (${plural(-due.dias, "día", "días")} atrás).`
+        : `Hola${d.counterpart ? ` ${d.counterpart.split(" ")[0]}` : ""}, recordatorio del pago de ${money(due.amount, due.currency)} ${dueText(due).toLowerCase()} (${prettyDay(due.day, { year: true })}).`, ``]
+    : [];
   return [
-    `*${d.name}*${d.counterpart ? ` (${d.counterpart})` : ""}`,
+    ...recordatorio,
+    `*${d.name}*${d.counterpart && !cobro ? ` (${d.counterpart})` : ""}`,
     `Al ${prettyDay(todayApp(), { year: true })}`,
     ...d.currencies.flatMap((c) => {
-      const t = d.totals[c];
-      return [``, varias ? `_En ${CUR[c].label}_` : null, `Prestado: ${money(t.loaned, c)}`, `Abonado: ${money(t.paid, c)}`, `*Saldo: ${money(Math.max(0, t.balance), c)}*`];
+      const tt = d.totals[c];
+      return [``, varias ? `_En ${CUR[c].label}_` : null, `${t.loaned}: ${money(tt.loaned, c)}`, `${t.paid}: ${money(tt.paid, c)}`, `*${cobro ? "Saldo pendiente" : "Saldo"}: ${money(Math.max(0, tt.balance), c)}*`];
     }),
     ult.length ? `` : null, ult.length ? `Últimos movimientos:` : null, ...ult,
   ].filter((x) => x !== null).join("\n");
