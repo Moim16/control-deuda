@@ -7,13 +7,13 @@
 //  GET    /api/push?cron=1&token= -> el MOTOR: mira que hay que avisar y envia.
 //
 //  El motor va aqui y no en su propio archivo porque el plan Hobby de Vercel
-//  deja 12 funciones y ya hay nueve; una ruta con `?cron=1` no cuesta nada.
+//  deja 12 funciones; una ruta con `?cron=1` no cuesta ninguna.
 //
 //  Serverless no tiene proceso de fondo, asi que un cron EXTERNO y gratis
 //  (cron-job.org) pega a esa ruta. Cada cuanto:
 //    - cada pocos minutos, si se quieren los comentarios al instante;
-//    - una vez al dia basta para los pagos y el mantenimiento, que salen una
-//      sola vez al dia por diseño (ver `claveAviso`).
+//    - una vez al dia basta para los pagos, que salen una sola vez al dia por
+//      diseño (ver `claveAviso`).
 //
 //  Sin VAPID configurado no hace nada y lo dice, en vez de fallar: asi un
 //  despliegue sin las llaves sigue funcionando, solo que sin avisos.
@@ -30,8 +30,7 @@ import { readJson } from "../lib/http.js";
 import { currentUser, deny } from "../lib/auth.js";
 import { DEBT_SELECT, rowToDebt } from "./debts.js";
 import {
-  proximoPago, tareaVencida, textoPago, textoTarea, textoComentario,
-  claveAviso, DIAS_ANTES,
+  proximoPago, textoPago, textoComentario, claveAviso, DIAS_ANTES,
 } from "../lib/avisos.js";
 
 // Configura VAPID una vez por instancia. Devuelve false si faltan las llaves.
@@ -175,49 +174,6 @@ async function motor() {
       enviados += await enviar([g.id], { ...t, url: `/?debt=${d.id}` });
     }
     avisos++;
-  }
-
-  /* --- mantenimiento del vehiculo (solo del dueño) --- */
-  const veh = await db.execute(`
-    SELECT v.id, v.name, v.accountId FROM vehicles v WHERE v.active = 1`);
-  if (veh.rows.length) {
-    const tareas = await db.execute(`SELECT * FROM vehicle_tasks WHERE active = 1`);
-    const servicios = await db.execute(`
-      SELECT s.id, s.vehicleId, s.day, st.taskId
-        FROM services s LEFT JOIN service_tasks st ON st.serviceId = s.id`);
-
-    // Los servicios con la lista de tareas que cubrio cada uno.
-    const porServicio = new Map();
-    for (const r of servicios.rows) {
-      const id = Number(r.id);
-      if (!porServicio.has(id)) {
-        porServicio.set(id, { id, vehicleId: Number(r.vehicleId), day: r.day, taskIds: [] });
-      }
-      if (r.taskId != null) porServicio.get(id).taskIds.push(Number(r.taskId));
-    }
-    const listaServicios = [...porServicio.values()];
-
-    for (const v of veh.rows) {
-      const vehId = Number(v.id);
-      const suyos = listaServicios.filter((s) => s.vehicleId === vehId);
-      for (const row of tareas.rows.filter((t) => Number(t.vehicleId) === vehId)) {
-        const task = {
-          id: Number(row.id), name: row.name,
-          everyMonths: row.everyMonths == null ? null : Number(row.everyMonths),
-        };
-        const st = tareaVencida(task, suyos, hoy);
-        if (!st || !st.vencido) continue;
-        if (!(await marcarSiEsNuevo(claveAviso("tarea", task.id, hoy)))) continue;
-
-        const admins = await db.execute({
-          sql: `SELECT id FROM users WHERE active = 1 AND accountId = ? AND role = 'admin'`,
-          args: [v.accountId],
-        });
-        const t = textoTarea({ name: v.name }, task, st);
-        enviados += await enviar(admins.rows.map((u) => Number(u.id)), { ...t, url: "/?view=veh" });
-        avisos++;
-      }
-    }
   }
 
   return { avisos, enviados };

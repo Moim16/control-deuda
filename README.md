@@ -1,6 +1,6 @@
 # Deudas
 
-PWA personal para llevar **lo que debo, lo que me deben, en qué se me va la plata y qué le toca al vehículo**: préstamos con su motivo y comprobante, abonos, saldo por cuenta y en total, gráficos, un simulador de "¿y si abono X cada tanto?", recordatorios de cuándo toca pagar (o cobrar) y acceso de **solo lectura** para la otra persona (mi hermano entra, ve su deuda y puede comentar, pero no toca nada).
+PWA personal para llevar **lo que debo, lo que me deben y en qué se me va la plata**: préstamos con su motivo y comprobante, abonos, saldo por cuenta y en total, gráficos, un simulador de "¿y si abono X cada tanto?", recordatorios de cuándo toca pagar (o cobrar) y acceso de **solo lectura** para la otra persona (mi hermano entra, ve su deuda y puede comentar, pero no toca nada).
 
 Mismo stack que `asistencia-obra`: un solo `index.html` sin frameworks, funciones serverless de Vercel y Turso/libSQL.
 
@@ -47,7 +47,7 @@ A una deuda o cobro se le puede cargar un **acuerdo de pago**: *cada semana / qu
 - En la ficha, una banda de color con la fecha y el monto.
 - En un cobro, el botón **Recordar** abre WhatsApp con el mensaje ya escrito: *"Hola Carlos, te escribo por el pago de C$1,000 que quedó para el 15 de julio (50 días atrás)"*, seguido del estado de cuenta.
 
-> **No hay notificaciones push a propósito.** Una PWA no las tiene garantizadas en iPhone y obligarían a depender de un servicio aparte. El aviso vive en la pantalla, que es donde uno lo va a ver, y el cobro se manda por WhatsApp, que es como se cobra de verdad. Si el saldo está en cero, no hay recordatorio: no hay nada que reclamar.
+> **El aviso vive primero en la pantalla**, que es donde uno lo va a ver, y el cobro se manda por WhatsApp, que es como se cobra de verdad. Los avisos del navegador son un añadido opcional (ver *Despliegue*). Si el saldo está en cero, no hay recordatorio: no hay nada que reclamar.
 
 ### Préstamos y abonos
 
@@ -106,23 +106,6 @@ Dos decisiones que importan:
 
 - **Borrar una categoría no borra sus gastos**: quedan como *"Sin categoría"* y siguen contando en los totales. La plata se gastó igual; quitarla del total sería mentir. Si solo quieres dejar de usarla, se archiva.
 - **El presupuesto es un tope que uno se propone, no una regla.** Pasarse no bloquea nada ni impide anotar: solo se pinta en rojo.
-
-### Mantenimiento del vehículo
-
-La pestaña **Vehículo** (solo del dueño) responde una sola pregunta: **¿qué le toca ya?**
-
-- **Vehículos** — la moto, el carro. Al crear uno se le cargan las **tareas típicas** de su tipo con sus intervalos (aceite cada 3.000 km o 6 meses, llantas cada 15.000, seguro cada año…), listas para ajustar.
-- **Tareas** — lo que hay que repetir. Se define **por kilómetros, por meses, o los dos**; con los dos, toca **lo que llegue primero**, que es como funciona un manual de verdad.
-- **Mantenimiento** — *un registro por visita al taller, no por cosa hecha*. En la casa comercial hacen el mantenimiento completo y se paga **un solo monto**: se anota una vez y se marcan de un tiro todas las tareas que cubrió (aceite, filtro, cadena). Desde ahí se cuenta cuándo vuelve a tocar cada una. Al abrir el formulario vienen **premarcadas las que ya tocaban**, que es lo que acaban de hacerte.
-- **Accesorios y mejoras** — antivuelco, pescantes, parrilla. Van en su propia lista con **cuánto llevas invertido**, porque no son algo que haya que repetir: no cubren tareas ni entran en el cálculo de "ya toca".
-
-Ambos llevan fecha, kilometraje, costo, lugar y la **factura**; y pueden no haber costado nada (garantía).
-
-El **kilometraje del vehículo** es el más alto que se haya anotado en un servicio; de ahí sale todo el cálculo. Una tarea que nunca se ha hecho **toca desde ya**. Arriba se muestran *"Ya toca"* y *"Pronto"* (a menos del 25% del intervalo), ordenadas por urgencia; el resto se pliega.
-
-> **Un servicio puede anotarse también como gasto del hogar.** Al registrarlo eliges la categoría (Transporte, por ejemplo) y la app crea el gasto, guardando su id en el servicio. Así la plata **figura una sola vez** en los totales del mes, editar el costo mueve las dos cosas, y borrar el servicio se lleva el gasto. Sin eso habría que anotarlo dos veces y las cuentas del mes dirían una cosa y el taller otra.
-
-Borrar una tarea **no borra sus servicios**: dejan de cubrirla y siguen en el historial. Se hizo el trabajo y se pagó; perderlo sería perder el kilometraje.
 
 ### Comentarios
 
@@ -190,7 +173,6 @@ Sin build ni framework:
 | `api/categories.js` | Categorías del gasto y su presupuesto mensual (solo dueño) |
 | `api/expenses.js` | Gastos del hogar y la captura de cada recibo (solo dueño) |
 | `api/incomes.js` | Ingresos: el sueldo con su historial y los extras (solo dueño) |
-| `api/vehicles.js` | Vehículos, sus tareas de mantenimiento y sus servicios (solo dueño) |
 
 ### Tablas
 
@@ -210,12 +192,8 @@ categories   gavetas del gasto del hogar + presupuesto mensual y su moneda
 expenses     un gasto por fila; categoryId NULL = sin categoría
 expense_receipts  la captura del recibo, misma idea que receipts
 incomes      ingresos: kind monthly (el sueldo, rige DESDE day) u once
-vehicles     la moto, el carro
-vehicle_tasks lo que hay que repetir: everyKm y/o everyMonths
-services     lo que se le hizo; kind service/accessory; expenseId ata el gasto
-             del hogar que generó
-service_tasks qué tareas cubrió cada servicio (un mantenimiento cubre varias)
-service_receipts  la factura del taller
+push_subs    los dispositivos suscritos a los avisos, atados a su usuario
+push_state   qué se avisó ya, para no repetirlo (serverless no tiene memoria)
 ```
 
 Decisiones que importan:
@@ -250,7 +228,7 @@ node scripts/demo.mjs         # datos de muestra: moises / deuda1234 (dueño), h
 
 > Nació de un rato peleando con el navegador: media hora de clicks para descubrir un nombre de variable mal escrito es una mala inversión. Corre en dos segundos.
 
-Las pruebas cubren, entre otras cosas, que una cuenta no vea ni toque nada de otra, que un viewer vea solo lo asignado y no pueda escribir salvo comentarios, que los saldos por moneda no se mezclen, que el comprobante viaje aparte y solo en JPEG, que borrar un movimiento se lleve sus comentarios, que el código de recuperación sirva una sola vez, que un cobro lleve sus totales igual que una deuda, con el acuerdo de pago validado completo y la dirección cambiable sin tocar el historial, que a un viewer no le lleguen los cobros, los gastos, los ingresos ni los vehículos ni aunque se le asignen por error, que el gasto que nace de un servicio del taller se mueva y se borre con él, y que un mantenimiento con un solo monto ponga al día varias tareas a la vez sin tocar las de otro vehículo.
+Las pruebas cubren, entre otras cosas, que una cuenta no vea ni toque nada de otra, que un viewer vea solo lo asignado y no pueda escribir salvo comentarios, que los saldos por moneda no se mezclen, que el comprobante viaje aparte y solo en JPEG, que borrar un movimiento se lleve sus comentarios, que el código de recuperación sirva una sola vez, que un cobro lleve sus totales igual que una deuda, con el acuerdo de pago validado completo y la dirección cambiable sin tocar el historial, que a un viewer no le lleguen los cobros, los gastos ni los ingresos ni aunque se le asignen por error, y que los avisos salgan una sola vez y contados desde el lado de quien los lee.
 
 ---
 
@@ -280,13 +258,13 @@ Web Push, sin Firebase ni cuentas de Google: las llaves VAPID son del propio ser
    https://<tu-app>.vercel.app/api/push?cron=1&token=<CRON_SECRET>
    ```
 
-   Cada 5 minutos si quieres los comentarios casi al instante; una vez al día basta para los pagos y el mantenimiento, que salen una sola vez al día por diseño.
+   Cada 5 minutos si quieres los comentarios casi al instante; una vez al día basta para los pagos, que salen una sola vez al día por diseño.
 
 4. En la app: *Ajustes → Avisarme en el teléfono*. Se activa **por dispositivo**.
 
 Sin las llaves, todo sigue funcionando: el endpoint responde `enabled:false` y la pantalla de avisos lo dice, en vez de fallar.
 
-**Qué avisa.** El pago acordado tres días antes, el mismo día y cuando se pasa; la tarea del vehículo que ya toca por fecha; y el comentario que escribe otra persona. Lo que toca por kilómetros no se avisa: no tiene fecha — depende de cuánto se ande — así que ponerle una sería adivinar, y eso se ve al abrir la app.
+**Qué avisa.** El pago acordado tres días antes, el mismo día y cuando se pasa; y el comentario que escribe otra persona. Un aviso cada día desde que falta un mes sería ruido y se acabaría silenciando.
 
 **Por qué así y no de otra forma.** Las reglas están en `lib/avisos.js`, separadas del envío, para poder probarlas sin mandar un push de verdad. Y son las MISMAS que usa la app nativa para sus recordatorios locales (`domain/avisos.dart`): si un día cambia el criterio, hay que cambiarlo en los dos.
 
