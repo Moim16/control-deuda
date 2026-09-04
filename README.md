@@ -192,6 +192,7 @@ categories   gavetas del gasto del hogar + presupuesto mensual y su moneda
 expenses     un gasto por fila; categoryId NULL = sin categoría
 expense_receipts  la captura del recibo, misma idea que receipts
 incomes      ingresos: kind monthly (el sueldo, rige DESDE day) u once
+signups      registros a medias: los datos y el codigo mientras se confirma
 push_subs    los dispositivos suscritos a los avisos, atados a su usuario
 push_state   qué se avisó ya, para no repetirlo (serverless no tiene memoria)
 ```
@@ -239,6 +240,21 @@ Las pruebas cubren, entre otras cosas, que una cuenta no vea ni toque nada de ot
 3. **Environment Variables**: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` y, una vez creada tu cuenta, `ALLOW_SIGNUP=0`.
 4. Deploy → abrir la URL → **Crear mi cuenta** → guardar el código de recuperación → crear la primera deuda.
 5. *Ajustes → Usuarios con acceso* → dar acceso al hermano marcando su deuda.
+
+### Correo de confirmación (opcional)
+
+El registro de una cuenta nueva manda un código de 6 dígitos al correo y no crea nada hasta que se confirma. Hace falta una clave de [Resend](https://resend.com) (gratis, 3.000 correos al mes, sin tarjeta):
+
+1. Crear la cuenta en Resend y copiar una **API key**.
+2. **En Vercel → Environment Variables**: `RESEND_API_KEY`. Y, si verificas un dominio propio, `FROM_EMAIL` (por ejemplo `Deudas <avisos@midominio.com>`); sin dominio se usa el remitente de pruebas de Resend, que sirve para tu propio correo.
+
+**Sin la clave, el registro sigue funcionando sin confirmar el correo**, igual que antes: si no, un despliegue sin ella se quedaría sin ninguna forma de crear la primera cuenta. Es la misma decisión que con las llaves de push.
+
+**Cómo funciona.** `?signup=1` valida los datos, guarda el registro pendiente en `signups` y manda el código; `?verify=1` lo confirma y ahí sí crea la cuenta. El código vive 15 minutos y aguanta 5 intentos; pasado eso, el registro pendiente se borra. Así un registro abandonado no deja usuario ni cuenta a medio hacer, y el nombre de usuario no queda reservado por un correo que nunca llegó.
+
+> Al usuario de solo lectura **no** se le pide correo: lo crea el dueño desde *Ajustes → Usuarios* con su contraseña, y su correo no hace falta para nada.
+
+---
 
 ### Avisos en el teléfono (opcional)
 

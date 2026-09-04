@@ -460,6 +460,9 @@ nav.bottom svg { width:21px; height:21px; }
     <label class="field"><span>Contraseña</span>
       <input id="loginPw" type="password" autocomplete="current-password" required>
     </label>
+    <label class="field hidden" id="mailField"><span>Correo</span>
+      <input id="loginMail" type="email" autocomplete="email" placeholder="Ahí te llega el código">
+    </label>
     <label class="field hidden" id="fullField"><span>Tu nombre (opcional)</span>
       <input id="loginFull" autocomplete="name" placeholder="Moisés" maxlength="80">
     </label>
@@ -907,6 +910,11 @@ let signupMode = false;
 $("switchMode").addEventListener("click", () => {
   signupMode = !signupMode;
   $("fullField").classList.toggle("hidden", !signupMode);
+  $("mailField").classList.toggle("hidden", !signupMode);
+  $("loginMail").required = signupMode;
+  // Al crear cuenta, la contraseña es NUEVA: con "current-password" el gestor
+  // ofrece una que ya existe en vez de proponer una y guardarla.
+  $("loginPw").autocomplete = signupMode ? "new-password" : "current-password";
   $("loginSubmit").textContent = signupMode ? "Crear cuenta" : "Entrar";
   $("switchText").textContent = signupMode ? "¿Ya tienes cuenta?" : "¿Primera vez?";
   $("switchMode").textContent = signupMode ? "Entrar" : "Crear mi cuenta";
@@ -929,8 +937,17 @@ $("loginForm").addEventListener("submit", async (e) => {
   try {
     const r = signupMode
       ? await api("/api/auth?signup=1", { method: "POST", body: {
-          name: $("loginName").value.trim(), password: $("loginPw").value, fullName: $("loginFull").value.trim() } })
+          name: $("loginName").value.trim(), password: $("loginPw").value,
+          fullName: $("loginFull").value.trim(), email: $("loginMail").value.trim() } })
       : await api("/api/auth", { method: "POST", body: { name: $("loginName").value.trim(), password: $("loginPw").value } });
+
+    // Registro con correo configurado: la cuenta NO existe todavia, hay que
+    // confirmar el codigo. Sin correo, el servidor la crea de una y sigue igual.
+    if (r.pending) {
+      $("loginPw").value = "";
+      btn.disabled = false;
+      return codigoCorreoScreen(r.email);
+    }
     saveSession(r);
     $("loginPw").value = "";
     S.recovery = r.recovery ? { has: true, at: null } : S.recovery;
@@ -942,6 +959,40 @@ $("loginForm").addEventListener("submit", async (e) => {
     showErr("loginMsg", err);
   } finally { btn.disabled = false; }
 });
+
+// El segundo paso del registro: el codigo que llego al correo. Hasta que se
+// confirma no existe ni la cuenta ni el usuario, asi que cerrar aqui no deja
+// nada a medio hacer.
+function codigoCorreoScreen(email) {
+  openModal(`
+    <h2>Revisa tu correo</h2>
+    <p class="muted" style="margin:-6px 0 14px;">Mandamos un código de seis dígitos a <b>${esc(email)}</b>. Vence en 15 minutos.</p>
+    <form id="vForm" class="card pad">
+      <label class="field"><span>Código</span>
+        <input id="vCode" required inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+               placeholder="000000" style="font-size:24px; font-weight:700; letter-spacing:8px; text-align:center;">
+      </label>
+      <div id="vMsg"></div>
+      <button class="btn primary wide" type="submit">Confirmar</button>
+    </form>
+    <p class="muted" style="margin:14px 0 0;">Si no llega, revisa el correo no deseado. También puedes cerrar esto y volver a intentarlo con otro correo.</p>`);
+
+  $("vForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; $("vMsg").innerHTML = "";
+    try {
+      const r = await api("/api/auth?verify=1", { method: "POST", body: { email, code: $("vCode").value } });
+      saveSession(r);
+      S.recovery = { has: true, at: null };
+      closeModal();
+      await start();
+      // El codigo de recuperacion, que solo se puede ver esta vez, y luego a
+      // crear la primera deuda.
+      if (r.recovery) codigoScreen(r.recovery, { luego: () => debtForm(null) });
+    } catch (err) { showErr("vMsg", err); btn.disabled = false; }
+  });
+}
 
 function recoverScreen() {
   openModal(`

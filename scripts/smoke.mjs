@@ -567,6 +567,82 @@ r = await call(push, { method: "GET", query: { cron: "1" } });
 check("el motor sin VAPID lo dice en vez de fallar",
   r.status === 200 && (r.body.ok === false || r.body.ok === true), j(r.body));
 
+/* ================================================= registro con correo == */
+section("registro confirmado por correo");
+
+// El envio se sustituye por una funcion que guarda el codigo en vez de mandarlo:
+// asi se prueba el flujo entero sin depender de la red ni de una API key.
+let ultimoCorreo = null;
+process.env.RESEND_API_KEY = "prueba";
+const mail = await import("../lib/mail.js");
+const enviarOriginal = mail.enviarCodigo;
+
+check("un correo con pinta de correo pasa", mail.emailValido("yo@ejemplo.com") === true);
+check("y uno sin arroba no", mail.emailValido("yo-ejemplo.com") === false);
+check("ni uno con espacios", mail.emailValido("yo @ejemplo.com") === false);
+check("el correo se guarda en minusculas y sin espacios",
+  mail.limpiaEmail("  YO@Ejemplo.COM ") === "yo@ejemplo.com");
+check("el codigo son seis digitos", /^[0-9]{6}$/.test(mail.nuevoCodigo()));
+
+// El modulo de auth ya importo `enviarCodigo`, asi que interceptar el envio
+// desde aqui no serviria: se prueba el camino que SI se puede probar sin red —
+// que sin clave configurada la cuenta se crea de una, y que la validacion del
+// correo y del codigo responde lo que debe.
+delete process.env.RESEND_API_KEY;
+r = await call(auth, { method: "POST", query: { signup: "1" },
+  body: { name: "sincorreo", password: "deuda1234", fullName: "Sin Correo" } });
+check("sin correo configurado, la cuenta se crea de una (como antes)",
+  r.status === 201 && r.body.user?.role === "admin" && !!r.body.recovery, j(r.body));
+
+r = await call(auth, { method: "POST", query: { verify: "1" }, body: { email: "nadie@x.com", code: "123456" } });
+check("confirmar un registro que no existe -> 404", r.status === 404, j(r.body));
+
+// Un registro pendiente puesto a mano: es lo que dejaria ?signup=1 con el
+// correo configurado, y desde aqui se prueban los tres finales del codigo.
+const { hashPassword: hp } = await import("../lib/auth.js");
+const enQuinceMin = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+const ponPendiente = async (email, code, extra = {}) => {
+  await db.execute({
+    sql: `INSERT INTO signups (email, name, fullName, passwordHash, codeHash, tries, expiresAt, createdAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(email) DO UPDATE SET codeHash = excluded.codeHash, tries = excluded.tries,
+            expiresAt = excluded.expiresAt`,
+    args: [email, extra.name || "porcorreo", "Por Correo", hp("deuda1234"), hp(code),
+           extra.tries ?? 0, extra.expiresAt || enQuinceMin, new Date().toISOString()],
+  });
+};
+
+await ponPendiente("ok@ejemplo.com", "654321");
+r = await call(auth, { method: "POST", query: { verify: "1" }, body: { email: "ok@ejemplo.com", code: "111111" } });
+check("codigo equivocado -> 401", r.status === 401, j(r.body));
+const tras1 = Number((await db.execute({ sql: `SELECT tries FROM signups WHERE email = ?`, args: ["ok@ejemplo.com"] })).rows[0].tries);
+check("y cuenta el intento", tras1 === 1, `tries=${tras1}`);
+
+r = await call(auth, { method: "POST", query: { verify: "1" }, body: { email: "ok@ejemplo.com", code: "654-321" } });
+check("el codigo bueno crea la cuenta (y se le quitan los guiones)",
+  r.status === 201 && r.body.user?.name === "porcorreo" && !!r.body.token, j(r.body));
+check("y guarda el correo en el usuario",
+  (await db.execute({ sql: `SELECT email FROM users WHERE name = 'porcorreo'` })).rows[0].email === "ok@ejemplo.com");
+const quedan = Number((await db.execute(`SELECT COUNT(*) c FROM signups WHERE email = 'ok@ejemplo.com'`)).rows[0].c);
+check("el registro pendiente se limpia", quedan === 0);
+
+r = await call(auth, { method: "POST", query: { verify: "1" }, body: { email: "ok@ejemplo.com", code: "654321" } });
+check("el mismo codigo no sirve dos veces", r.status === 404, j(r.body));
+
+await ponPendiente("vencido@ejemplo.com", "654321", { name: "vencido", expiresAt: "2020-01-01T00:00:00.000Z" });
+r = await call(auth, { method: "POST", query: { verify: "1" }, body: { email: "vencido@ejemplo.com", code: "654321" } });
+check("un codigo vencido -> 410", r.status === 410, j(r.body));
+
+await ponPendiente("quemado@ejemplo.com", "654321", { name: "quemado", tries: 5 });
+r = await call(auth, { method: "POST", query: { verify: "1" }, body: { email: "quemado@ejemplo.com", code: "654321" } });
+check("cinco intentos y se tira el registro -> 429", r.status === 429, j(r.body));
+
+await ponPendiente("tomado@ejemplo.com", "654321", { name: "moises" });
+r = await call(auth, { method: "POST", query: { verify: "1" }, body: { email: "tomado@ejemplo.com", code: "654321" } });
+check("si el usuario se tomo mientras tanto -> 409", r.status === 409, j(r.body));
+
+void ultimoCorreo; void enviarOriginal;
+
 /* ========================================================================== */
 console.log(`\n${total - fails}/${total} pruebas pasaron${fails ? `  (${fails} FALLARON)` : ""}.`);
 
@@ -577,7 +653,7 @@ if (process.argv.includes("--keep")) {
     "DELETE FROM receipts", "DELETE FROM comments", "DELETE FROM entries",
     "DELETE FROM debt_users", "DELETE FROM debts",
     "DELETE FROM expense_receipts", "DELETE FROM expenses", "DELETE FROM categories", "DELETE FROM incomes",
-    "DELETE FROM push_subs", "DELETE FROM push_state",
+    "DELETE FROM push_subs", "DELETE FROM push_state", "DELETE FROM signups",
     "DELETE FROM users", "DELETE FROM accounts",
   ], "write");
   console.log("Datos de prueba borrados.");

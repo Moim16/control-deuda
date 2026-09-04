@@ -2,9 +2,16 @@
 //  Usuarios de la app.
 //
 //  POST   /api/auth                  { name, password }  -> login. Devuelve { user, token }.
-//  POST   /api/auth?signup=1         { name, password, fullName } -> crea una CUENTA
-//                                    nueva y su dueño (admin). Se puede cerrar con la
-//                                    env var ALLOW_SIGNUP=0.
+//  POST   /api/auth?signup=1         { name, password, fullName, email } -> PIDE el
+//                                    codigo: valida los datos, manda un codigo de 6
+//                                    digitos al correo y NO crea nada todavia.
+//                                    Responde { pending:true, email }.
+//                                    Sin correo configurado crea la cuenta de una
+//                                    (responde igual que ?verify=1).
+//                                    Se puede cerrar con ALLOW_SIGNUP=0.
+//  POST   /api/auth?verify=1         { email, code } -> confirma el codigo y CREA la
+//                                    cuenta con su dueño. Devuelve { user, account,
+//                                    token, recovery }.
 //  POST   /api/auth?new=1            { name, password, fullName, role, debtIds }
 //                                    -> el admin crea un usuario DE SU CUENTA.
 //  POST   /api/auth?recover=1        { name, code, password } -> entrar con el
@@ -36,10 +43,38 @@
 
 import { db, ensureSchema, nowIso, newRecoveryCode, normalizeRecovery } from "../lib/db.js";
 import { readJson, clean, parseId } from "../lib/http.js";
+import { mailListo, emailValido, limpiaEmail, enviarCodigo, nuevoCodigo } from "../lib/mail.js";
 import {
   hashPassword, verifyPassword, newToken,
   currentUser, isAdmin, deny, notYours,
 } from "../lib/auth.js";
+
+// Crea la cuenta y su dueño, y responde con la sesion abierta. La usan los dos
+// caminos del registro: con el correo confirmado y sin correo configurado, que
+// hacen lo mismo una vez que se sabe que los datos son buenos.
+async function crearCuenta(res, { name, pw, passwordHash, fullName, email }) {
+  const now = nowIso();
+  const acc = await db.execute({
+    sql: `INSERT INTO accounts (name, createdAt) VALUES (?, ?)`,
+    args: [`Deudas de ${fullName || name}`, now],
+  });
+  const accountId = Number(acc.lastInsertRowid);
+  const token = newToken();
+  // El dueño es el unico usuario al que nadie mas puede rescatar: se le entrega
+  // su codigo aqui mismo, con la cuenta recien creada.
+  const code = newRecoveryCode();
+  const ins = await db.execute({
+    sql: `INSERT INTO users (accountId, name, fullName, email, role, passwordHash, sessionToken, createdAt, recoveryHash, recoveryAt)
+          VALUES (?, ?, ?, ?, 'admin', ?, ?, ?, ?, ?)`,
+    args: [accountId, name, fullName, email, passwordHash || hashPassword(pw), token, now,
+           hashPassword(normalizeRecovery(code)), now],
+  });
+  return res.status(201).json({
+    user: { id: Number(ins.lastInsertRowid), name, fullName, role: "admin", active: 1, accountId },
+    account: { id: accountId, name: `Deudas de ${fullName || name}` },
+    token, created: true, recovery: code,
+  });
+}
 
 const MAX_FAILS = 5;
 const LOCK_MS = 15 * 60 * 1000;
@@ -139,31 +174,83 @@ export default async function handler(req, res) {
       const name = (body.name ?? "").toString().trim();
       const pw = (body.password ?? "").toString();
       const fullName = clean(body.fullName, 80);
+      const email = limpiaEmail(body.email);
       if (!NAME_RE.test(name)) return res.status(400).json({ error: NAME_MSG });
       if (badPassword(pw)) return res.status(400).json({ error: PW_MSG });
       const dup = await db.execute({ sql: `SELECT 1 FROM users WHERE name = ? COLLATE NOCASE`, args: [name] });
       if (dup.rows.length) return res.status(409).json({ error: "Ese usuario ya existe. Elige otro." });
 
-      const now = nowIso();
-      const acc = await db.execute({
-        sql: `INSERT INTO accounts (name, createdAt) VALUES (?, ?)`,
-        args: [`Deudas de ${fullName || name}`, now],
+      // Sin correo configurado se crea la cuenta de una, como antes: pedir un
+      // codigo que no se puede enviar dejaria la app sin forma de arrancar.
+      if (!mailListo()) return crearCuenta(res, { name, pw, fullName, email: null });
+
+      if (!emailValido(email)) return res.status(400).json({ error: "Escribe un correo válido." });
+      const dupMail = await db.execute({
+        sql: `SELECT 1 FROM users WHERE email = ? COLLATE NOCASE`, args: [email],
       });
-      const accountId = Number(acc.lastInsertRowid);
-      const token = newToken();
-      // El dueño es el unico usuario al que nadie mas puede rescatar: se le
-      // entrega su codigo aqui mismo, con la cuenta recien creada.
-      const code = newRecoveryCode();
-      const ins = await db.execute({
-        sql: `INSERT INTO users (accountId, name, fullName, role, passwordHash, sessionToken, createdAt, recoveryHash, recoveryAt)
-              VALUES (?, ?, ?, 'admin', ?, ?, ?, ?, ?)`,
-        args: [accountId, name, fullName, hashPassword(pw), token, now,
-               hashPassword(normalizeRecovery(code)), now],
+      if (dupMail.rows.length) {
+        return res.status(409).json({ error: "Ya hay una cuenta con ese correo." });
+      }
+
+      const code = nuevoCodigo();
+      const ahora = nowIso();
+      // 15 minutos: suficiente para ir al correo y volver, y poco para que un
+      // codigo que se filtre no sirva mañana.
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      await db.execute({
+        sql: `INSERT INTO signups (email, name, fullName, passwordHash, codeHash, tries, expiresAt, createdAt)
+              VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+              ON CONFLICT(email) DO UPDATE SET
+                name = excluded.name, fullName = excluded.fullName,
+                passwordHash = excluded.passwordHash, codeHash = excluded.codeHash,
+                tries = 0, expiresAt = excluded.expiresAt`,
+        args: [email, name, fullName, hashPassword(pw), hashPassword(code), expiresAt, ahora],
       });
-      return res.status(201).json({
-        user: { id: Number(ins.lastInsertRowid), name, fullName, role: "admin", active: 1, accountId },
-        account: { id: accountId, name: `Deudas de ${fullName || name}` },
-        token, created: true, recovery: code,
+
+      const enviado = await enviarCodigo(email, code);
+      if (!enviado.ok) {
+        // Si no salio el correo, el registro pendiente no sirve para nada: se
+        // borra para no dejar un usuario reservado por un correo que no llego.
+        await db.execute({ sql: `DELETE FROM signups WHERE email = ?`, args: [email] });
+        return res.status(502).json({ error: enviado.error });
+      }
+      return res.status(200).json({ pending: true, email });
+    }
+
+    /* -------------------------------------------------------- POST ?verify=1 */
+    if (req.method === "POST" && req.query?.verify) {
+      const email = limpiaEmail(body.email);
+      const code = (body.code ?? "").toString().replace(/[^0-9]/g, "");
+      const rs = await db.execute({ sql: `SELECT * FROM signups WHERE email = ?`, args: [email] });
+      const p = rs.rows[0];
+      if (!p) return res.status(404).json({ error: "No hay ningún registro para ese correo. Empieza de nuevo." });
+
+      if (p.expiresAt < nowIso()) {
+        await db.execute({ sql: `DELETE FROM signups WHERE email = ?`, args: [email] });
+        return res.status(410).json({ error: "El código venció. Pide uno nuevo." });
+      }
+      // Cinco intentos y se tira el registro: es el mismo tope que la
+      // contraseña, y sin el, seis digitos se prueban a mano.
+      if (Number(p.tries) >= MAX_FAILS) {
+        await db.execute({ sql: `DELETE FROM signups WHERE email = ?`, args: [email] });
+        return res.status(429).json({ error: "Demasiados intentos. Pide un código nuevo." });
+      }
+      if (!verifyPassword(code, p.codeHash)) {
+        await db.execute({ sql: `UPDATE signups SET tries = tries + 1 WHERE email = ?`, args: [email] });
+        return res.status(401).json({ error: "El código no es correcto." });
+      }
+
+      // Entre pedir el codigo y confirmarlo alguien pudo tomar el usuario.
+      const dup = await db.execute({ sql: `SELECT 1 FROM users WHERE name = ? COLLATE NOCASE`, args: [p.name] });
+      if (dup.rows.length) {
+        await db.execute({ sql: `DELETE FROM signups WHERE email = ?`, args: [email] });
+        return res.status(409).json({ error: "Ese usuario ya existe. Empieza de nuevo con otro." });
+      }
+
+      await db.execute({ sql: `DELETE FROM signups WHERE email = ?`, args: [email] });
+      return crearCuenta(res, {
+        name: p.name, fullName: p.fullName, email,
+        passwordHash: p.passwordHash,
       });
     }
 
